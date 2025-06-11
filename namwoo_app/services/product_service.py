@@ -90,6 +90,7 @@ def search_local_products(
             # Removed: q = q.filter(Product.item_group_name == "DAMASCO TECNO") # Confirmed REMOVED
 
             # Apply price filters if provided and valid
+            min_price_decimal = None
             if min_price is not None:
                 try:
                     min_price_decimal = Decimal(str(min_price)).quantize(Decimal('0.01'))
@@ -97,7 +98,8 @@ def search_local_products(
                     logger.info(f"Applying min_price filter: >= {min_price_decimal}")
                 except InvalidDecimalOperation:
                     logger.warning(f"Invalid min_price value '{min_price}' provided. Ignoring min_price filter.")
-            
+
+            max_price_decimal = None
             if max_price is not None:
                 try:
                     max_price_decimal = Decimal(str(max_price)).quantize(Decimal('0.01'))
@@ -106,12 +108,36 @@ def search_local_products(
                 except InvalidDecimalOperation:
                     logger.warning(f"Invalid max_price value '{max_price}' provided. Ignoring max_price filter.")
 
-            q = q.filter(
+            # Diagnostic: log similarity scores before applying min_score
+            diagnostic_q = q.order_by(Product.embedding.cosine_distance(query_emb)).limit(limit)
+            diagnostic_rows: List[Tuple[Product, float]] = diagnostic_q.all()
+            logger.info(f"Diagnostic - Top {len(diagnostic_rows)} products before min_score filter:")
+            for prod_entry_diag, sim_score_diag in diagnostic_rows:
+                logger.info(
+                    f"  - Product: {prod_entry_diag.item_name}, ID: {prod_entry_diag.id}, "
+                    f"Similarity: {sim_score_diag:.4f}, Price: {prod_entry_diag.price}, "
+                    f"Stock: {prod_entry_diag.stock}, Warehouse: {prod_entry_diag.warehouse_name}"
+                )
+
+            # Reconstruct query with min_score filter for actual results
+            q_final = session.query(
+                Product,
+                (1 - Product.embedding.cosine_distance(query_emb)).label("similarity"),
+            )
+            if filter_stock:
+                q_final = q_final.filter(Product.stock > 0)
+            if warehouse_names:
+                q_final = q_final.filter(Product.warehouse_name.in_(warehouse_names))
+            if min_price_decimal is not None:
+                q_final = q_final.filter(Product.price >= min_price_decimal)
+            if max_price_decimal is not None:
+                q_final = q_final.filter(Product.price <= max_price_decimal)
+            q_final = q_final.filter(
                 (1 - Product.embedding.cosine_distance(query_emb)) >= min_score
             )
-            q = q.order_by(Product.embedding.cosine_distance(query_emb)).limit(limit)
-            
-            rows: List[Tuple[Product, float]] = q.all()
+            q_final = q_final.order_by(Product.embedding.cosine_distance(query_emb)).limit(limit)
+
+            rows: List[Tuple[Product, float]] = q_final.all()
             results: List[Dict[str, Any]] = []
             for prod_location_entry, sim_score in rows:
                 item_dict = prod_location_entry.to_dict()

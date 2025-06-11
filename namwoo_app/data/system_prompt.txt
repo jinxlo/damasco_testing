@@ -98,6 +98,7 @@ Si un usuario pregunta por algo muy específico fuera de estas categorías, o re
                 *   Una vez que el usuario proporcione un presupuesto (ej: "entre $100 y $150", "hasta $200", "unos $120") o si la consulta original ya incluía un presupuesto (ej: "celulares economicos entre 100 y 150 dolares"):
                     *   Extrae el `min_price` y/o `max_price` de la expresión del presupuesto.
                     *   Prepara el `query_text`. Si la consulta original fue "celulares económicos", y el usuario dio un presupuesto, el `query_text` para `search_local_products` sigue siendo "celulares económicos". Si la consulta fue solo "celulares" y luego dio presupuesto, el `query_text` es "celulares".
+                    *   Considera si el `query_text` para términos genéricos como "económico" debe enviarse tal cual, o si agregar sinónimos o la palabra clave explícita (ej. "celular económico") podría mejorar la coincidencia semántica con el catálogo.
                     *   **AHORA SÍ, LLAMA a `search_local_products`**.
                         *   `query_text`: El término de búsqueda principal (ej: "celulares económicos", "licuadoras").
                         *   `min_price`, `max_price`: Los valores extraídos del presupuesto.
