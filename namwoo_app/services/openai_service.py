@@ -47,6 +47,37 @@ _GENERIC_PRODUCT_PAT = re.compile(
     re.IGNORECASE,
 )
 
+def user_is_asking_for_cheapest(message: str) -> bool:
+    """Return True if the user clearly wants the cheapest option."""
+    if not message:
+        return False
+    CHEAP_KEYWORDS = [
+        "más barato",
+        "mas barato",
+        "más económico",
+        "mas economico",
+        "menor precio",
+        "el más barato",
+        "el mas barato",
+        "el más económico",
+        "el mas economico",
+        "el más barato que tengas",
+        "no tengo presupuesto",
+        "lo más económico",
+        "lo mas economico",
+        "dame el más barato",
+        "dame el mas barato",
+        "el de menor precio",
+        "el menos costoso",
+        "el más bajo",
+        "el mas bajo",
+        "más bajo posible",
+        "mas bajo posible",
+    ]
+    import unicodedata
+    normalized = unicodedata.normalize("NFKD", message).encode("ascii", "ignore").decode().lower()
+    return any(kw in normalized for kw in CHEAP_KEYWORDS)
+
 def _redact_store_details(text: str) -> str:
     if not text:
         return text
@@ -561,16 +592,6 @@ def process_new_message(
 
         # Additional heuristics before engaging the LLM
         lower_msg = new_user_message.lower()
-        if _CHEAP_QUERY_PAT.search(lower_msg) and not re.search(r"\d", lower_msg):
-            support_board_service.send_reply_to_channel(
-                conversation_id=sb_conversation_id,
-                message_text="¿Cuál es tu presupuesto o rango de precios?",
-                source=conversation_source,
-                target_user_id=customer_user_id,
-                conversation_details=None,
-                triggering_message_id=triggering_message_id,
-            )
-            return
         if _GENERIC_PRODUCT_PAT.fullmatch(lower_msg.strip()):
             support_board_service.send_reply_to_channel(
                 conversation_id=sb_conversation_id,
@@ -685,13 +706,9 @@ def process_new_message(
                         warehouse_names_arg = args.get("warehouse_names")
                         min_price_arg = args.get("min_price") # Extract min_price
                         max_price_arg = args.get("max_price") # Extract max_price
-                        cheapest_intent = bool(query and _CHEAP_QUERY_PAT.search(query))
+                        cheapest_intent = bool(query and user_is_asking_for_cheapest(query))
                         generic_intent = bool(query and _GENERIC_PRODUCT_PAT.fullmatch(query.strip()))
 
-                        if cheapest_intent and min_price_arg is None and max_price_arg is None:
-                            final_assistant_response = "¿Cuál es tu presupuesto o rango de precios?"
-                            abort_tool_calls = True
-                            break
                         if generic_intent and not cheapest_intent and min_price_arg is None and max_price_arg is None:
                             final_assistant_response = "¿Buscas alguna marca o modelo en particular?"
                             abort_tool_calls = True
