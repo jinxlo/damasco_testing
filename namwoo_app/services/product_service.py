@@ -54,23 +54,34 @@ def search_local_products(
     log_message_parts = [
         f"Vector search initiated: '{query_text[:80]}…'",
         f"limit={limit}",
-        f"stock_filter={filter_stock}", 
-        f"min_score={min_score:.2f}" # Will now show 0.01
+        f"stock_filter={filter_stock}",
+        f"min_score={min_score:.2f}"
     ]
     if warehouse_names:
         log_message_parts.append(f"warehouses={warehouse_names}")
-    if min_price is not None: 
-        log_message_parts.append(f"min_price={min_price}") 
-    if max_price is not None: 
-        log_message_parts.append(f"max_price={max_price}") 
-    
+    if min_price is not None:
+        log_message_parts.append(f"min_price={min_price}")
+    if max_price is not None:
+        log_message_parts.append(f"max_price={max_price}")
+
     logger.info(", ".join(log_message_parts))
+    logger.debug(
+        "search_local_products args - query_text=%s, limit=%s, filter_stock=%s, min_score=%s, warehouses=%s, min_price=%s, max_price=%s",
+        query_text,
+        limit,
+        filter_stock,
+        min_score,
+        warehouse_names,
+        min_price,
+        max_price,
+    )
 
     embedding_model = Config.OPENAI_EMBEDDING_MODEL if hasattr(Config, 'OPENAI_EMBEDDING_MODEL') else "text-embedding-3-small"
     query_emb = embedding_utils.get_embedding(query_text, model=embedding_model)
     if not query_emb:
         logger.error("Query embedding generation failed – aborting search.")
         return None
+    logger.debug("Generated embedding length: %d using model %s", len(query_emb), embedding_model)
 
     with db_utils.get_db_session() as session:
         if not session:
@@ -81,11 +92,14 @@ def search_local_products(
                 Product,
                 (1 - Product.embedding.cosine_distance(query_emb)).label("similarity"),
             )
+            applied_filters = ["cosine_distance"]
             if filter_stock:
                 q = q.filter(Product.stock > 0)
+                applied_filters.append("stock>0")
 
             if warehouse_names:
                 q = q.filter(Product.warehouse_name.in_(warehouse_names))
+                applied_filters.append(f"warehouses={warehouse_names}")
 
             # Removed: q = q.filter(Product.item_group_name == "DAMASCO TECNO") # Confirmed REMOVED
 
@@ -95,6 +109,7 @@ def search_local_products(
                 try:
                     min_price_decimal = Decimal(str(min_price)).quantize(Decimal('0.01'))
                     q = q.filter(Product.price >= min_price_decimal)
+                    applied_filters.append(f"price>={min_price_decimal}")
                     logger.info(f"Applying min_price filter: >= {min_price_decimal}")
                 except InvalidDecimalOperation:
                     logger.warning(f"Invalid min_price value '{min_price}' provided. Ignoring min_price filter.")
@@ -104,6 +119,7 @@ def search_local_products(
                 try:
                     max_price_decimal = Decimal(str(max_price)).quantize(Decimal('0.01'))
                     q = q.filter(Product.price <= max_price_decimal)
+                    applied_filters.append(f"price<={max_price_decimal}")
                     logger.info(f"Applying max_price filter: <= {max_price_decimal}")
                 except InvalidDecimalOperation:
                     logger.warning(f"Invalid max_price value '{max_price}' provided. Ignoring max_price filter.")
@@ -111,6 +127,7 @@ def search_local_products(
             # Diagnostic: log similarity scores before applying min_score
             diagnostic_q = q.order_by(Product.embedding.cosine_distance(query_emb)).limit(limit)
             diagnostic_rows: List[Tuple[Product, float]] = diagnostic_q.all()
+            logger.debug("Applied filters for diagnostic query: %s", applied_filters)
             logger.info(f"Diagnostic - Top {len(diagnostic_rows)} products before min_score filter:")
             for prod_entry_diag, sim_score_diag in diagnostic_rows:
                 logger.info(
@@ -138,6 +155,7 @@ def search_local_products(
             q_final = q_final.order_by(Product.embedding.cosine_distance(query_emb)).limit(limit)
 
             rows: List[Tuple[Product, float]] = q_final.all()
+            logger.debug("DB returned %d rows after final filters", len(rows))
             results: List[Dict[str, Any]] = []
             for prod_location_entry, sim_score in rows:
                 item_dict = prod_location_entry.to_dict()
@@ -148,7 +166,10 @@ def search_local_products(
                     "llm_formatted_description": prod_location_entry.format_for_llm() 
                 })
                 results.append(item_dict)
-            logger.info("Vector search returned %d product location entries.", len(results))
+            if not results:
+                logger.info("Vector search completed but no products matched the criteria.")
+            else:
+                logger.info("Vector search returned %d product location entries.", len(results))
             return results
         except SQLAlchemyError as db_exc:
             logger.exception("Database error during product search: %s", db_exc)
