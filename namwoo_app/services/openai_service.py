@@ -37,6 +37,16 @@ _REDACT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Patterns to detect price-sensitive or generic queries
+_CHEAP_QUERY_PAT = re.compile(
+    r"\b(?:mas\s+barato|m[aá]s\s+barato|barat(?:o|a)s?|econ[oó]mic(?:o|a)s?|cheapest)\b",
+    re.IGNORECASE,
+)
+_GENERIC_PRODUCT_PAT = re.compile(
+    r"^(?:celular(?:es)?|telefono|phone|tablet|laptop|televisor|tv|nevera|refrigerador|lavadora|secadora|microondas|freidora)$",
+    re.IGNORECASE,
+)
+
 def _redact_store_details(text: str) -> str:
     if not text:
         return text
@@ -549,6 +559,29 @@ def process_new_message(
             logger.info(f"No city detected in new user message for SB Conv {sb_conversation_id}.")
             # The LLM will be prompted to ask for the city if not already set.
 
+        # Additional heuristics before engaging the LLM
+        lower_msg = new_user_message.lower()
+        if _CHEAP_QUERY_PAT.search(lower_msg) and not re.search(r"\d", lower_msg):
+            support_board_service.send_reply_to_channel(
+                conversation_id=sb_conversation_id,
+                message_text="¿Cuál es tu presupuesto o rango de precios?",
+                source=conversation_source,
+                target_user_id=customer_user_id,
+                conversation_details=None,
+                triggering_message_id=triggering_message_id,
+            )
+            return
+        if _GENERIC_PRODUCT_PAT.fullmatch(lower_msg.strip()):
+            support_board_service.send_reply_to_channel(
+                conversation_id=sb_conversation_id,
+                message_text="¿Buscas alguna marca o modelo en particular?",
+                source=conversation_source,
+                target_user_id=customer_user_id,
+                conversation_details=None,
+                triggering_message_id=triggering_message_id,
+            )
+            return
+
 
     conversation_data = support_board_service.get_sb_conversation_data(sb_conversation_id)
     if conversation_data is None or not conversation_data.get("messages"): 
@@ -592,7 +625,8 @@ def process_new_message(
     final_assistant_response: Optional[str] = None
     try:
         tool_call_count = 0
-        while tool_call_count <= TOOL_CALL_RETRY_LIMIT: 
+        while tool_call_count <= TOOL_CALL_RETRY_LIMIT:
+            abort_tool_calls = False
             openai_model = current_app.config.get("OPENAI_CHAT_MODEL", DEFAULT_OPENAI_MODEL)
             max_tokens = current_app.config.get("OPENAI_MAX_TOKENS", DEFAULT_MAX_TOKENS)
             temperature = current_app.config.get("OPENAI_TEMPERATURE", DEFAULT_OPENAI_TEMPERATURE)
@@ -651,7 +685,18 @@ def process_new_message(
                         warehouse_names_arg = args.get("warehouse_names")
                         min_price_arg = args.get("min_price") # Extract min_price
                         max_price_arg = args.get("max_price") # Extract max_price
-                        
+                        cheapest_intent = bool(query and _CHEAP_QUERY_PAT.search(query))
+                        generic_intent = bool(query and _GENERIC_PRODUCT_PAT.fullmatch(query.strip()))
+
+                        if cheapest_intent and min_price_arg is None and max_price_arg is None:
+                            final_assistant_response = "¿Cuál es tu presupuesto o rango de precios?"
+                            abort_tool_calls = True
+                            break
+                        if generic_intent and not cheapest_intent and min_price_arg is None and max_price_arg is None:
+                            final_assistant_response = "¿Buscas alguna marca o modelo en particular?"
+                            abort_tool_calls = True
+                            break
+
                         # If warehouse_names are not provided by LLM (e.g., first product search after getting city)
                         # try to get them from conversation_location context.
                         if not warehouse_names_arg:
@@ -675,7 +720,9 @@ def process_new_message(
                                 filter_stock=filter_stock_flag,
                                 warehouse_names=warehouse_names_arg,
                                 min_price=min_price_arg, # Pass min_price
-                                max_price=max_price_arg  # Pass max_price
+                                max_price=max_price_arg,  # Pass max_price
+                                sort_by_price_asc=cheapest_intent,
+                                exclude_accessories=generic_intent
                             )
                             output_txt = _format_search_results_for_llm(search_res)
                         else:
@@ -734,11 +781,17 @@ def process_new_message(
                     "content": sanitized_output,
                 })
 
-            messages.extend(tool_outputs_for_llm) 
+            if abort_tool_calls:
+                break
+
+            messages.extend(tool_outputs_for_llm)
             tool_call_count += 1
             
-            if tool_call_count > TOOL_CALL_RETRY_LIMIT and not final_assistant_response: 
+            if tool_call_count > TOOL_CALL_RETRY_LIMIT and not final_assistant_response:
                 logger.warning(f"Tool call retry limit ({TOOL_CALL_RETRY_LIMIT}) strictly exceeded for Conv {sb_conversation_id}. Breaking loop.")
+                break
+
+            if abort_tool_calls:
                 break
 
     except RateLimitError:
