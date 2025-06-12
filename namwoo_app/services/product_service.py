@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..models.product import Product # Product model used for ORM and Product.to_dict()
 from ..utils import db_utils, embedding_utils # embedding_utils for search
+from ..utils.string_utils import canonicalize_whs_name
 from ..config import Config # For Config.OPENAI_EMBEDDING_MODEL
 
 logger = logging.getLogger(__name__) # Standard logger for this module
@@ -58,6 +59,7 @@ def search_local_products(
         f"min_score={min_score:.2f}"
     ]
     if warehouse_names:
+        warehouse_names = [canonicalize_whs_name(w) for w in warehouse_names if w]
         log_message_parts.append(f"warehouses={warehouse_names}")
     if min_price is not None:
         log_message_parts.append(f"min_price={min_price}")
@@ -128,7 +130,10 @@ def search_local_products(
             diagnostic_q = q.order_by(Product.embedding.cosine_distance(query_emb)).limit(limit)
             diagnostic_rows: List[Tuple[Product, float]] = diagnostic_q.all()
             logger.debug("Applied filters for diagnostic query: %s", applied_filters)
-            logger.info(f"Diagnostic - Top {len(diagnostic_rows)} products before min_score filter:")
+            logger.debug(
+                "Diagnostic - Top %d products before min_score filter:",
+                len(diagnostic_rows),
+            )
             for prod_entry_diag, sim_score_diag in diagnostic_rows:
                 logger.info(
                     f"  - Product: {prod_entry_diag.item_name}, ID: {prod_entry_diag.id}, "
@@ -216,11 +221,12 @@ def add_or_update_product_in_db(
 ) -> Tuple[bool, str]:
     
     item_code = _normalize_string(damasco_product_data_camel.get("itemCode"))
-    whs_name = _normalize_string(damasco_product_data_camel.get("whsName"))
+    whs_name_raw = _normalize_string(damasco_product_data_camel.get("whsName"))
+    whs_name = canonicalize_whs_name(whs_name_raw)
 
     _temp_product_id_for_upsert: Optional[str] = None
     if item_code and whs_name:
-        sanitized_whs_name = re.sub(r'[^a-zA-Z0-9_-]', '_', whs_name)
+        sanitized_whs_name = re.sub(r'[^A-Z0-9_-]', '_', whs_name)
         _temp_product_id_for_upsert = f"{item_code}_{sanitized_whs_name}"
         if len(_temp_product_id_for_upsert) > 512:
             _temp_product_id_for_upsert = _temp_product_id_for_upsert[:512]
