@@ -123,23 +123,66 @@ A key aspect is distinguishing messages from different sources to ensure correct
 
 ## 📁 Folder Structure
 /damasco_testing
+├── .gitignore
 ├── CHANGELOG.md
 ├── README.md
 ├── migrations/
 │   └── 2024Q2_canonicalise_whs_names.sql
 ├── namwoo_app/
-│   ├── api/               # Flask Blueprints and routes
-│   ├── config/            # Environment and settings loader
-│   ├── data/              # System prompt and store location files
-│   ├── models/            # SQLAlchemy ORM models
-│   ├── services/          # LLM and Support Board integrations
-│   ├── utils/             # Helper modules
-│   ├── scheduler/         # Optional scheduled tasks
-│   ├── celery_app.py      # Celery application setup
-│   ├── celery_tasks.py    # Background processing jobs
-│   └── run.py             # Gunicorn entry point
-├── tests/                 # Pytest suite
-│   └── *.py
+│   ├── .env.example
+│   ├── .gitignore
+│   ├── README.md
+│   ├── __init__.py
+│   ├── celery_app.py
+│   ├── celery_tasks.py
+│   ├── requirements.txt
+│   ├── run.py
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── receiver_routes.py
+│   │   └── routes.py
+│   ├── config/
+│   │   ├── __init__.py
+│   │   └── config.py
+│   ├── data/
+│   │   ├── schema.sql
+│   │   ├── store_locations.json
+│   │   ├── store_locations.py
+│   │   └── system_prompt.txt
+│   ├── logs/
+│   │   ├── app.log
+│   │   └── sync.log
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── conversation_pause.py
+│   │   └── product.py
+│   ├── scheduler/
+│   │   ├── __init__.py
+│   │   └── tasks.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── damasco_service.py
+│   │   ├── google_service.py
+│   │   ├── llm_processing_service.py
+│   │   ├── openai_service.py
+│   │   ├── product_service.py
+│   │   ├── support_board_service.py
+│   │   └── sync_service.py
+│   └── utils/
+│       ├── __init__.py
+│       ├── conversation_location.py
+│       ├── db_utils.py
+│       ├── embedding_utils.py
+│       ├── product_utils.py
+│       ├── string_utils.py
+│       ├── text_utils.py
+│       └── whs_utils.py
+├── tests/
+│   ├── test_end_to_end_checkout.py
+│   ├── test_product_utils.py
+│   ├── test_products.py
+│   ├── test_prompt_flow.py
+│   └── test_whatsapp_template.py
 
 *(Note: The `fetcher_scripts/` directory for Damasco data acquisition is considered a separate project that pushes data to this app.)*
 ## 🛠️ Setup & Installation Guide (NamDamasco Application Server)
