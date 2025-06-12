@@ -166,10 +166,27 @@ def search_local_products(
                     "llm_formatted_description": prod_location_entry.format_for_llm() 
                 })
                 results.append(item_dict)
+            if not results and filter_stock:
+                logger.info(
+                    "No products found with stock filter applied. Retrying without stock filter for reference."
+                )
+                return search_local_products(
+                    query_text,
+                    limit=limit,
+                    filter_stock=False,
+                    min_score=min_score,
+                    warehouse_names=warehouse_names,
+                    min_price=min_price,
+                    max_price=max_price,
+                )
             if not results:
-                logger.info("Vector search completed but no products matched the criteria.")
+                logger.info(
+                    "Vector search completed but no products matched the criteria."
+                )
             else:
-                logger.info("Vector search returned %d product location entries.", len(results))
+                logger.info(
+                    "Vector search returned %d product location entries.", len(results)
+                )
             return results
         except SQLAlchemyError as db_exc:
             logger.exception("Database error during product search: %s", db_exc)
