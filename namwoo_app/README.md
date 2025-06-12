@@ -314,7 +314,7 @@ A key aspect is distinguishing messages from different sources to ensure correct
 
 ## 💡 Important Considerations & Future Enhancements
 
-*   **WhatsApp Template Management:** Ensure the `confirmacion_datos_cliente` template is approved by Meta and correctly set up in your WhatsApp Business API / Support Board integration. Parameter order and count must match what the `send_whatsapp_order_summary_template` tool prepares.
+*   **WhatsApp Template Management:** Ensure the `confirmacion_datos_cliente` template is approved by Meta and correctly set up in your WhatsApp Business API / Support Board integration. Parameter order and count must match what the `send_whatsapp_order_summary_template` tool prepares. El campo "Dirección" de esa plantilla debe contener **solo** la sucursal donde se retirará el producto, nunca la dirección del cliente.
 *   **Error Handling & Resilience.**
 *   **API Rate Limits.**
 *   **Security:**

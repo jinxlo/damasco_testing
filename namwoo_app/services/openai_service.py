@@ -316,14 +316,46 @@ def _tool_get_store_info(city_name: Optional[str] = None) -> str:
             return json.dumps({"status": "no_cities_found", "message": "No hay ciudades con tiendas configuradas en el sistema."}, ensure_ascii=False)
 
 
+def sanitize_tool_args(args: Dict[str, Any], conversation_id: str) -> Dict[str, Any]:
+    """Sanitize tool arguments from the LLM before execution."""
+    if not str(args.get("conversation_id", "")).isdigit():
+        logger.info(
+            "Replacing invalid conversation_id '%s' with '%s'", args.get("conversation_id"), conversation_id
+        )
+        args["conversation_id"] = conversation_id
+    return args
 
-def _tool_send_whatsapp_order_summary_template(args: Dict) -> Dict:
-    phone_e164 = f"+{args['customer_platform_user_id'].lstrip('+')}"
+
+def _sanitize_template_variables(vars: list[str]) -> list[str]:
+    """Ensure the address field uses a known store/branch name."""
+    # El campo "dirección" en la plantilla de WhatsApp SIEMPRE debe ser la
+    # sucursal donde está disponible el producto. Nunca la dirección del cliente.
+    if not isinstance(vars, list) or len(vars) != 8:
+        return vars
+    direccion = vars[5]
+    branch_names = [s.get("branchName") for s in _load_store_data() if s.get("branchName")]
+    if direccion not in branch_names:
+        logger.info("Overriding direccion '%s' with 'Sucursal por confirmar'", direccion)
+        vars[5] = "Sucursal por confirmar"
+    return vars
+
+
+
+def _tool_send_whatsapp_order_summary_template(
+    customer_platform_user_id: str,
+    conversation_id: str,
+    template_variables: list[str],
+) -> Dict:
+    """WARNING: This function signature must always match the tool schema
+    exposed to the LLM for function calling. Any changes require updates in
+    both places."""
+
+    phone_e164 = f"+{customer_platform_user_id.lstrip('+')}"
     ok = _send_whatsapp_template(
         phone_e164,
         template_name="confirmacion_datos_cliente",
         template_languages="es_ES",
-        parameters=args["template_variables"],
+        parameters=template_variables,
     )
     return {"status": "success" if ok else "failed"}
 
@@ -686,6 +718,7 @@ def process_new_message(
                 try:
                     args_str = tc.function.arguments
                     args = json.loads(args_str)
+                    args = sanitize_tool_args(args, sb_conversation_id)
                 except json.JSONDecodeError as json_err:
                     logger.error(f"JSONDecodeError for tool {fn_name} args (Conv {sb_conversation_id}): {args_str}. Error: {json_err}")
                     args = {} 
@@ -765,7 +798,9 @@ def process_new_message(
                     elif fn_name == "send_whatsapp_order_summary_template":
                         cust_id_arg = args.get("customer_platform_user_id") or customer_user_id 
                         conv_id_arg = args.get("conversation_id") or sb_conversation_id
-                        template_vars_arg = args.get("template_variables")
+                        template_vars_arg = _sanitize_template_variables(
+                            args.get("template_variables")
+                        )
                         
                         if not cust_id_arg:
                             logger.error(f"Missing 'customer_platform_user_id' for {fn_name} in Conv {sb_conversation_id}, and fallback customer_user_id is also missing/invalid.")

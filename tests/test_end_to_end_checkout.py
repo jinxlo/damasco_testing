@@ -74,11 +74,11 @@ def test_end_to_end_checkout(monkeypatch):
 
     monkeypatch.setattr(openai_service, "_send_whatsapp_template", fake_send, raising=False)
 
-    args = {
-        "customer_platform_user_id": "+1234567",
-        "template_variables": [str(i) for i in range(8)]
-    }
-    res = openai_service._tool_send_whatsapp_order_summary_template(args)
+    res = openai_service._tool_send_whatsapp_order_summary_template(
+        customer_platform_user_id="+1234567",
+        conversation_id="999",
+        template_variables=[str(i) for i in range(8)],
+    )
     assert res == {"status": "success"}
     assert len(calls) == 1
     assert len(calls[0]) == 8
