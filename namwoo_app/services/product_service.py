@@ -53,6 +53,8 @@ def search_local_products(
     warehouse_names: Optional[List[str]] = None,
     min_price: Optional[Union[float, int, str]] = None,
     max_price: Optional[Union[float, int, str]] = None,
+    sort_by_price_asc: bool = False,
+    exclude_accessories: bool = False,
 ) -> Optional[List[Dict[str, Any]]]:
     if not query_text or not isinstance(query_text, str):
         logger.warning("Search query is empty or invalid.")
@@ -71,10 +73,14 @@ def search_local_products(
         log_message_parts.append(f"min_price={min_price}")
     if max_price is not None:
         log_message_parts.append(f"max_price={max_price}")
+    if sort_by_price_asc:
+        log_message_parts.append("sort_by_price_asc=True")
+    if exclude_accessories:
+        log_message_parts.append("exclude_accessories=True")
 
     logger.info(", ".join(log_message_parts))
     logger.debug(
-        "search_local_products args - query_text=%s, limit=%s, filter_stock=%s, min_score=%s, warehouses=%s, min_price=%s, max_price=%s",
+        "search_local_products args - query_text=%s, limit=%s, filter_stock=%s, min_score=%s, warehouses=%s, min_price=%s, max_price=%s, sort_by_price_asc=%s, exclude_accessories=%s",
         query_text,
         limit,
         filter_stock,
@@ -82,6 +88,8 @@ def search_local_products(
         warehouse_names,
         min_price,
         max_price,
+        sort_by_price_asc,
+        exclude_accessories,
     )
 
     embedding_model = (
@@ -181,9 +189,12 @@ def search_local_products(
             q_final = q_final.filter(
                 (1 - Product.embedding.cosine_distance(query_emb)) >= min_score
             )
-            q_final = q_final.order_by(
-                Product.embedding.cosine_distance(query_emb)
-            ).limit(limit)
+            if sort_by_price_asc:
+                q_final = q_final.order_by(Product.price.asc()).limit(limit)
+            else:
+                q_final = q_final.order_by(
+                    Product.embedding.cosine_distance(query_emb)
+                ).limit(limit)
 
             rows: List[Tuple[Product, float]] = q_final.all()
             logger.debug("DB returned %d rows after final filters", len(rows))
@@ -203,6 +214,9 @@ def search_local_products(
                     }
                 )
                 results.append(item_dict)
+            if exclude_accessories:
+                results = [r for r in results if not r.get("is_accessory")]
+
             if not results and filter_stock:
                 logger.info(
                     "No products found with stock filter applied. Retrying without stock filter for reference."
@@ -215,6 +229,8 @@ def search_local_products(
                     warehouse_names=warehouse_names,
                     min_price=min_price,
                     max_price=max_price,
+                    sort_by_price_asc=sort_by_price_asc,
+                    exclude_accessories=exclude_accessories,
                 )
             if not results:
                 logger.info(
