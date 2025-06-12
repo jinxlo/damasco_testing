@@ -426,7 +426,7 @@ def add_or_update_product_in_db(
 
         upsert_stmt = (
             insert_stmt.on_conflict_do_update(
-                constraint="uq_item_code_whs_canon",
+                constraint="uq_item_code_per_whs_canonical",
                 set_=update_set,
             )
             .returning(literal_column("xmax"))
