@@ -8,6 +8,8 @@ from decimal import InvalidOperation as InvalidDecimalOperation
 from typing import Any, Dict, List, Optional, Tuple, Union  # Added Union
 
 import numpy as np
+from sqlalchemy import func, literal_column
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -389,121 +391,54 @@ def add_or_update_product_in_db(
         "embedding": embedding_vector_for_db,
         "source_data_json": damasco_product_data_camel,
     }
+    product_id = product_utils.generate_product_location_id(item_code, whs_name_raw)
+    if not product_id:
+        logger.error(f"{log_prefix} Failed to generate product ID.")
+        return False, "invalid_generated_id"
+
+    new_values_map.update({
+        "id": product_id,
+        "warehouse_name_canonical": whs_canonical,
+    })
 
     try:
-        entry = (
-            session.query(Product)
-            .filter_by(
-                item_code=item_code,
-                warehouse_name_canonical=whs_canonical,
+        insert_stmt = insert(Product).values(**new_values_map)
+
+        update_set = {
+            "item_name": insert_stmt.excluded.item_name,
+            "description": insert_stmt.excluded.description,
+            "llm_summarized_description": insert_stmt.excluded.llm_summarized_description,
+            "category": insert_stmt.excluded.category,
+            "sub_category": insert_stmt.excluded.sub_category,
+            "brand": insert_stmt.excluded.brand,
+            "line": insert_stmt.excluded.line,
+            "item_group_name": insert_stmt.excluded.item_group_name,
+            "warehouse_name": insert_stmt.excluded.warehouse_name,
+            "branch_name": insert_stmt.excluded.branch_name,
+            "price": insert_stmt.excluded.price,
+            "price_bolivar": insert_stmt.excluded.price_bolivar,
+            "stock": insert_stmt.excluded.stock,
+            "searchable_text_content": insert_stmt.excluded.searchable_text_content,
+            "embedding": insert_stmt.excluded.embedding,
+            "source_data_json": insert_stmt.excluded.source_data_json,
+            "updated_at": func.now(),
+        }
+
+        upsert_stmt = (
+            insert_stmt.on_conflict_do_update(
+                constraint="uq_item_code_whs_canon",
+                set_=update_set,
             )
-            .first()
+            .returning(literal_column("xmax"))
         )
 
-        if entry:
-            changed_fields_log_details = []
-            needs_update = False
+        result = session.execute(upsert_stmt)
+        session.commit()
 
-            for field_key, new_value in new_values_map.items():
-                if field_key == "source_data_json":
-                    if entry.source_data_json != new_value:
-                        needs_update = True
-                        changed_fields_log_details.append(
-                            f"{field_key}: (JSON content changed)"
-                        )
-                    continue
-
-                db_value = getattr(entry, field_key, None)
-                is_different = False
-
-                if field_key == "embedding":
-                    db_value_list = (
-                        db_value.tolist()
-                        if isinstance(db_value, np.ndarray)
-                        else db_value
-                    )
-                    new_value_list = new_value
-                    if (
-                        (db_value_list is None and new_value_list is not None)
-                        or (db_value_list is not None and new_value_list is None)
-                        or (
-                            db_value_list is not None
-                            and new_value_list is not None
-                            and not np.array_equal(
-                                np.array(db_value_list, dtype=float),
-                                np.array(new_value_list, dtype=float),
-                            )
-                        )
-                    ):
-                        is_different = True
-                elif field_key in ["price", "price_bolivar"]:
-                    if (
-                        (db_value is None and new_value is not None)
-                        or (db_value is not None and new_value is None)
-                        or (
-                            db_value is not None
-                            and new_value is not None
-                            and db_value != new_value
-                        )
-                    ):
-                        is_different = True
-                else:
-                    if db_value != new_value:
-                        is_different = True
-
-                if is_different:
-                    needs_update = True
-                    log_new_val = (
-                        str(new_value)[:70] + "..."
-                        if isinstance(new_value, (str, list, np.ndarray, dict))
-                        and len(str(new_value)) > 70
-                        else new_value
-                    )
-                    log_db_val = (
-                        str(db_value)[:70] + "..."
-                        if isinstance(db_value, (str, list, np.ndarray, dict))
-                        and len(str(db_value)) > 70
-                        else db_value
-                    )
-                    if field_key == "embedding" and new_value is not None:
-                        log_new_val = f"Vector(len={len(new_value)})"
-                    if field_key == "embedding" and db_value is not None:
-                        log_db_val = f"Vector(len={len(db_value) if isinstance(db_value, list) else ('np.array' if isinstance(db_value, np.ndarray) else 'UnknownType')})"
-                    changed_fields_log_details.append(
-                        f"{field_key}: (DB='{log_db_val}' -> New='{log_new_val}')"
-                    )
-
-            if not needs_update:
-                logger.info(f"{log_prefix} No changes detected. Skipping DB write.")
-                return True, "skipped_no_change"
-
-            logger.info(
-                f"{log_prefix} Changes detected. Updating entry. Details: {'; '.join(changed_fields_log_details)}"
-            )
-            for key, value in new_values_map.items():
-                setattr(entry, key, value)
-            entry.updated_at = datetime.utcnow()
-
-            session.commit()
-            logger.info(f"{log_prefix} Entry successfully updated.")
-            op_msg = "updated"
-            if changed_fields_log_details:
-                op_msg = (
-                    f"updated (Changes: {', '.join(changed_fields_log_details[:3])}"
-                )
-                if len(changed_fields_log_details) > 3:
-                    op_msg += " ...)"
-                else:
-                    op_msg += ")"
-            return True, op_msg
-
-        else:
-            logger.info(f"{log_prefix} New product. Adding to DB.")
-            entry = Product(**new_values_map)
-            session.add(entry)
-            session.commit()
-            logger.info(f"{log_prefix} New entry successfully added.")
-            return True, "added_new"
+        row = result.fetchone()
+        operation = "updated" if row and row[0] != 0 else "inserted"
+        logger.info(f"{log_prefix} Upsert completed. Operation: {operation}.")
+        return True, operation
 
     except SQLAlchemyError as db_exc:
         session.rollback()
