@@ -5,7 +5,8 @@ import types
 from pathlib import Path
 
 requests_mod = types.ModuleType('requests')
-sys.modules.setdefault('requests', requests_mod)
+sys.modules['requests'] = requests_mod
+requests_mod.post = lambda *a, **k: None
 flask_mod = types.ModuleType('flask')
 class DummyFlask:
     def __init__(self, *a, **k):
@@ -55,11 +56,20 @@ spec.loader.exec_module(sbs)
 def test_send_whatsapp_template_success(monkeypatch):
     captured = {}
 
-    def fake_call(payload):
-        captured.update(payload)
-        return {"messages": [{"id": "1"}]}
+    def fake_post(url, json=None, timeout=10):
+        captured.update(json)
+        class Resp:
+            def raise_for_status(self_inner):
+                pass
+            def json(self_inner):
+                return {"success": True}
+        return Resp()
 
-    monkeypatch.setattr(sbs, "_call_sb_api", fake_call)
+    monkeypatch.setattr(requests_mod, "post", fake_post)
+    sbs.current_app.config = {
+        'SUPPORT_BOARD_API_URL': 'http://sb.test',
+        'SUPPORT_BOARD_API_TOKEN': 'tkn'
+    }
 
     ok = sbs._send_whatsapp_template(
         "+1234567890",
@@ -69,4 +79,4 @@ def test_send_whatsapp_template_success(monkeypatch):
         phone_id="1"
     )
     assert ok is True
-    assert json.loads(captured["parameters"]) == ["a", "b"]
+    assert captured["parameters"] == ["a", "b"]
