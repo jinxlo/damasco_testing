@@ -17,6 +17,7 @@ from . import lead_api_client # Assuming lead_api_client.py is in the same 'serv
 from ..config import Config # For SYSTEM_PROMPT, MAX_HISTORY_MESSAGES etc.
 from ..utils import embedding_utils
 from ..utils import conversation_location
+import re
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,19 @@ _STORE_LOCATIONS_FILE_PATH = os.path.join(
     'store_locations.json'
 )
 _cached_store_data: Optional[List[Dict[str, str]]] = None
+
+# ---------------------------------------------------------------------------
+# Helper to redact store details from tool outputs
+# ---------------------------------------------------------------------------
+_REDACT_PATTERN = re.compile(
+    r"(branchName\s*:?\s*\"[^\"]*\"|address\s*:?\s*\"[^\"]*\"|whsName\s*:?\s*\"[^\"]*\"|Almac[eé]n[^,\n]+|Direcci[oó]n\:[^\n]+)",
+    re.IGNORECASE,
+)
+
+def _redact_store_details(text: str) -> str:
+    if not text:
+        return text
+    return _REDACT_PATTERN.sub("<REDACTED>", text)
 
 # ---------------------------------------------------------------------------
 # Initialise OpenAI client for Chat Completions
@@ -947,8 +961,12 @@ def process_new_message(
                     logger.exception(f"Tool execution error for {fn_name} (Conv {sb_conversation_id}): {tool_exec_err}")
                     output_txt = json.dumps({"status": "error", "message": f"Error interno al ejecutar la herramienta {fn_name}: {str(tool_exec_err)}"}, ensure_ascii=False)
                 
-                tool_outputs_for_llm.append({ 
-                    "tool_call_id": tool_call_id, "role": "tool", "name": fn_name, "content": output_txt,
+                sanitized_output = _redact_store_details(output_txt)
+                tool_outputs_for_llm.append({
+                    "tool_call_id": tool_call_id,
+                    "role": "tool",
+                    "name": fn_name,
+                    "content": sanitized_output,
                 })
 
             messages.extend(tool_outputs_for_llm) 
