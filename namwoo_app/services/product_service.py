@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..config import Config  # For Config.OPENAI_EMBEDDING_MODEL
 from ..models.product import Product  # Product model used for ORM and Product.to_dict()
-from ..utils import db_utils, embedding_utils  # embedding_utils for search
+from ..utils import db_utils, embedding_utils, product_utils  # product_utils for variant helpers
 from ..utils.whs_utils import canonicalize_whs
 
 logger = logging.getLogger(__name__)  # Standard logger for this module
@@ -587,5 +587,41 @@ def get_live_product_details_by_id(composite_id: str) -> Optional[Dict[str, Any]
         except Exception as exc:
             logger.exception(
                 f"Unexpected error fetching product by composite_id: {composite_id}, Error: {exc}"
+            )
+            return None
+
+def get_color_variants_for_sku(item_code_query: str) -> Optional[List[str]]:
+    """Return other item_codes with the same base code but different color suffixes."""
+    if not item_code_query:
+        logger.error("get_color_variants_for_sku: Missing item_code_query argument.")
+        return None
+    base_code = product_utils.strip_color_suffix(str(item_code_query).strip())
+    if not base_code:
+        return []
+    with db_utils.get_db_session() as session:
+        if not session:
+            logger.error("DB session unavailable for get_color_variants_for_sku.")
+            return None
+        try:
+            like_pattern = f"{base_code}%"
+            rows = (
+                session.query(Product.item_code)
+                .filter(Product.item_code.ilike(like_pattern))
+                .distinct()
+                .all()
+            )
+            variants = sorted({r[0] for r in rows if r[0]})
+            logger.info(
+                "Found %d potential color variants for base code %s", len(variants), base_code
+            )
+            return variants
+        except SQLAlchemyError as db_exc:
+            logger.exception(
+                "DB error fetching color variants for %s: %s", base_code, db_exc
+            )
+            return None
+        except Exception as exc:
+            logger.exception(
+                "Unexpected error fetching color variants for %s: %s", base_code, exc
             )
             return None

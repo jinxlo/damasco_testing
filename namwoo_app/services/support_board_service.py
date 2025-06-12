@@ -558,20 +558,34 @@ def _send_whatsapp_template(
         logger.error("Missing required params for whatsapp-send-template")
         return False
 
-    payload = {
+    data = {
+        "token": current_app.config.get("SUPPORT_BOARD_API_TOKEN"),
         "function": "whatsapp-send-template",
         "to": phone_e164,
         "template_name": template_name,
         "template_languages": template_languages,
-        "parameters": json.dumps(parameters),
+        "parameters": parameters,
     }
     if phone_id:
-        payload["phone_id"] = phone_id
+        data["phone_id"] = phone_id
 
-    resp = _call_sb_api(payload)
-    ok = isinstance(resp, dict) and "messages" in resp
-    logger.info("Template send %s for %s", "OK" if ok else "FAILED", phone_e164)
-    return ok
+    api_url = current_app.config.get("SUPPORT_BOARD_API_URL")
+    if not api_url or not data["token"]:
+        logger.error("Support Board API URL or token not configured for WhatsApp template send")
+        return False
+    try:
+        resp = requests.post(api_url, json=data, timeout=10)
+        resp.raise_for_status()
+        resp_json = resp.json()
+        ok = isinstance(resp_json, dict) and resp_json.get("success") is True
+        logger.info("Template send %s for %s", "OK" if ok else "FAILED", phone_e164)
+        return ok
+    except requests.RequestException as e:
+        logger.error("HTTP error sending WhatsApp template: %s", e, exc_info=True)
+        return False
+    except Exception as e:
+        logger.exception("Unexpected error sending WhatsApp template: %s", e)
+        return False
 
 # --- NEW PUBLIC FUNCTIONS: Order Confirmation Template & Sales Routing ---
 def send_order_confirmation_template(user_id: str, conversation_id: str, variables: list):

@@ -316,6 +316,16 @@ def _tool_get_store_info(city_name: Optional[str] = None) -> str:
             return json.dumps({"status": "no_cities_found", "message": "No hay ciudades con tiendas configuradas en el sistema."}, ensure_ascii=False)
 
 
+def _tool_get_color_variants(item_code: str) -> str:
+    """Return color variants for a product SKU."""
+    if not item_code:
+        return json.dumps({"status": "error", "message": "El parámetro item_code es requerido."}, ensure_ascii=False)
+    variants = product_service.get_color_variants_for_sku(item_code)
+    if variants is None:
+        return json.dumps({"status": "error", "message": "No se pudo buscar variantes."}, ensure_ascii=False)
+    return json.dumps({"status": "success" if variants else "not_found", "variants": variants}, ensure_ascii=False, indent=2)
+
+
 def sanitize_tool_args(args: Dict[str, Any], conversation_id: str) -> Dict[str, Any]:
     """Sanitize tool arguments from the LLM before execution."""
     if not str(args.get("conversation_id", "")).isdigit():
@@ -430,7 +440,7 @@ tools_schema = [
             },
         },
     },
-    { 
+    {
         "type": "function",
         "function": {
             "name": "get_live_product_details",
@@ -455,7 +465,24 @@ tools_schema = [
             },
         },
     },
-    { 
+    {
+        "type": "function",
+        "function": {
+            "name": "get_color_variants",
+            "description": "Obtiene los distintos códigos de item (SKU) que representan el mismo producto en otros colores, basándose en el SKU proporcionado.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_code": {
+                        "type": "string",
+                        "description": "SKU base del producto para buscar variantes de color."
+                    }
+                },
+                "required": ["item_code"]
+            }
+        }
+    },
+    {
         "type": "function",
         "function": {
             "name": "send_whatsapp_order_summary_template",
@@ -793,8 +820,21 @@ def process_new_message(
                                 output_txt = json.dumps({"status": "error", "message": f"Error: Tipo de identificador '{id_type}' no soportado. Use 'sku' o 'composite_id'."}, ensure_ascii=False)
                         else:
                             output_txt = json.dumps({"status": "error", "message": "Error: Faltan 'product_identifier' o 'identifier_type' para get_live_product_details."}, ensure_ascii=False)
-                    
-                    
+
+
+                    elif fn_name == "get_color_variants":
+                        item_code_arg = args.get("item_code")
+                        if item_code_arg:
+                            variants = product_service.get_color_variants_for_sku(item_code_arg)
+                            if variants is None:
+                                output_txt = json.dumps({"status": "error", "message": "No se pudo buscar variantes."}, ensure_ascii=False)
+                            else:
+                                status = "success" if variants else "not_found"
+                                output_txt = json.dumps({"status": status, "variants": variants}, ensure_ascii=False, indent=2)
+                        else:
+                            output_txt = json.dumps({"status": "error", "message": "Error: Falta 'item_code' para get_color_variants."}, ensure_ascii=False)
+
+
                     elif fn_name == "send_whatsapp_order_summary_template":
                         cust_id_arg = args.get("customer_platform_user_id") or customer_user_id 
                         conv_id_arg = args.get("conversation_id") or sb_conversation_id
