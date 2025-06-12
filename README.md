@@ -1,13 +1,13 @@
 # 💠 NamDamasco: AI-Powered Sales & Support Assistant 💠
 
-**Version: 1.0.3** 
-**Last Updated:** May 28, 2025 
+**Version: 1.0.4** 
+**Last Updated:** June 11, 2025 
 
 ## 📖 Overview
 
 NamDamasco is an advanced Python Flask web application backend designed to serve as the intelligent core for a multi-channel conversational AI sales and support assistant. It seamlessly integrates with a customer interaction platform (like Nulu AI / Support Board), enabling businesses to offer sophisticated, AI-driven conversations on popular messaging channels like WhatsApp and Instagram (via Facebook Messenger).
 
-The system's primary function is to understand customer inquiries in natural language, search a locally synchronized and enhanced product catalog, provide accurate product information (including details, availability, and pricing), and facilitate a smooth shopping experience. It leverages Large Language Models (LLMs) for natural language understanding and response generation, vector embeddings for semantic product search, and a robust data pipeline for keeping product information up-to-date.
+The system's primary function is to understand customer inquiries in natural language, search a locally synchronized and enhanced product catalog, provide accurate product information (including details, availability, and pricing), and facilitate a smooth shopping experience. It leverages Large Language Models (LLMs) for natural language understanding and response generation, vector embeddings for semantic product search, and a robust data pipeline for keeping product information up-to-date. A key part of the sales flow involves collecting essential customer details and sending a WhatsApp template message for final confirmation before handing the conversation to a human sales agent.
 
 ## ✨ Core Strategy & System Architecture
 
@@ -121,56 +121,27 @@ A key aspect is distinguishing messages from different sources to ensure correct
 *   📝 **Structured & Multi-Destination Logging.**
 *   🌍 **Production-Ready Design** for Gunicorn/Caddy/Nginx.
 
-## 📁 Folder Structure (NamDamasco Application Server)
-/NAMDAMASCO_APP_ROOT/
-|-- namwoo_app/ # Main application package
-| |-- init.py # App factory (create_app), main app config
-| |-- api/
-| | |-- init.py # Defines 'api_bp' Blueprint, imports route modules
-| | |-- receiver_routes.py # Handles /api/receive-products (enqueues Celery tasks)
-| | |-- routes.py # Handles /api/sb-webhook, /api/health
-| |-- celery_app.py # Celery application setup (with Flask context management)
-| |-- celery_tasks.py # Celery task definitions (product processing, summarization)
-| |-- config/
-| | |-- config.py # Defines Config class, loads .env
-| |-- data/ # Static data, e.g., LLM system prompts
-| | |-- system_prompt.txt
-| |-- models/
-| | |-- init.py # Defines SQLAlchemy Base, imports all models
-| | |-- product.py # Product ORM model (with description, llm_summarized_description)
-| | |-- conversation_pause.py # ConversationPause ORM model
-| |-- services/
-| | |-- init.py # Exposes service functions/modules for easy import
-| | |-- damasco_service.py # Helper for initial processing of raw Damasco data (outputs snake_case)
-| | |-- google_service.py # Google Gemini specific logic (chat, summarization)
-| | |-- openai_service.py # OpenAI specific logic (chat, embedding, summarization)
-| | |-- product_service.py # Core logic for DB ops, vector search, delta detection
-| | |-- support_board_service.py # Platform API interactions (e.g., Nulu AI / Support Board)
-| | |-- sync_service.py # Coordinates bulk data sync (can call Celery or product_service)
-| | |-- llm_processing_service.py # Dispatches summarization to configured LLM provider
-| |-- utils/
-| | |-- init.py
-| | |-- db_utils.py # Database session management, pause logic
-| | |-- embedding_utils.py # Helper for calling embedding models
-| | |-- text_utils.py # Contains strip_html_to_text
-| | |-- product_utils.py # Shared product ID generation logic
-| |-- scheduler/ # APScheduler related tasks (if used for other cron jobs)
-| |-- init.py
-| |-- tasks.py
-|-- data/ # Project-level data (e.g., SQL schema if not using migrations)
-| |-- schema.sql # Must include 'description', 'llm_summarized_description', and 'conversation_pauses' table
-|-- logs/ # Created at runtime for log files
-|-- venv/ # Python virtual environment (.gitignored)
-|-- .env # Environment variables (SECRET! .gitignored)
-|-- .env.example # Example environment variables
-|-- .gitignore
-|-- requirements.txt # Python dependencies (add beautifulsoup4)
-|-- run.py # Entry point for Gunicorn (e.g., run:app which calls create_app)
-|-- gunicorn.conf.py # (Optional) Gunicorn configuration file
-|-- Caddyfile # Example Caddy reverse proxy configuration
-|-- README.md # This file
-*(Note: The `fetcher_scripts/` directory for Damasco data acquisition is considered a separate, complementary project/component that pushes data to this application.)*
+## 📁 Folder Structure
+/damasco_testing
+├── CHANGELOG.md
+├── README.md
+├── migrations/
+│   └── 2024Q2_canonicalise_whs_names.sql
+├── namwoo_app/
+│   ├── api/               # Flask Blueprints and routes
+│   ├── config/            # Environment and settings loader
+│   ├── data/              # System prompt and store location files
+│   ├── models/            # SQLAlchemy ORM models
+│   ├── services/          # LLM and Support Board integrations
+│   ├── utils/             # Helper modules
+│   ├── scheduler/         # Optional scheduled tasks
+│   ├── celery_app.py      # Celery application setup
+│   ├── celery_tasks.py    # Background processing jobs
+│   └── run.py             # Gunicorn entry point
+├── tests/                 # Pytest suite
+│   └── *.py
 
+*(Note: The `fetcher_scripts/` directory for Damasco data acquisition is considered a separate project that pushes data to this app.)*
 ## 🛠️ Setup & Installation Guide (NamDamasco Application Server)
 
 ### Prerequisites:
