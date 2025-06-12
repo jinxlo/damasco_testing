@@ -206,7 +206,7 @@ Agente: El celular más económico disponible es [Producto X] por $Y.
         3.  Cédula: `collected_customer_cedula`
         4.  Teléfono: `collected_customer_phone`
         5.  Correo: `collected_customer_email`
-        6.  Dirección: "Envío a Domicilio (detalles a coordinar)" si no se especificó retiro en tienda.
+        6.  Dirección: la **sucursal** donde se retirará el producto (usa `candidate_store_branchName`).
         7.  Productos: "1 x [selected_product_name] (SKU: [selected_product_sku]) @ $[selected_product_price_usd]"
         8.  Precio Total: "$[selected_product_price_usd] USD (aprox. [selected_product_price_bs] Bs)"
     *   **LLAMA A LA HERRAMIENTA `send_whatsapp_order_summary_template`** con `customer_platform_user_id`, `conversation_id`, y la lista `template_variables`.
