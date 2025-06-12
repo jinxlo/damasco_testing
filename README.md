@@ -9,6 +9,15 @@ NamDamasco is an advanced Python Flask web application backend designed to serve
 
 The system's primary function is to understand customer inquiries in natural language, search a locally synchronized and enhanced product catalog, provide accurate product information (including details, availability, and pricing), and facilitate a smooth shopping experience. It leverages Large Language Models (LLMs) for natural language understanding and response generation, vector embeddings for semantic product search, and a robust data pipeline for keeping product information up-to-date.
 
+## ⚙️ How It Works (Quick Summary)
+
+1. External *Fetcher Service* sends product data to `/api/receive-products`.
+2. The API validates the payload and enqueues Celery tasks.
+3. Each task enriches data, generates embeddings, and upserts the database.
+4. Users chat via WhatsApp/Instagram; LLM tools search products and reply.
+5. Human agent replies pause the bot for that conversation.
+
+
 ## ✨ Core Strategy & System Architecture
 
 NamDamasco's architecture is built around providing a highly responsive, accurate, and context-aware conversational experience. This is achieved through several key components and processes:
@@ -121,55 +130,70 @@ A key aspect is distinguishing messages from different sources to ensure correct
 *   📝 **Structured & Multi-Destination Logging.**
 *   🌍 **Production-Ready Design** for Gunicorn/Caddy/Nginx.
 
-## 📁 Folder Structure (NamDamasco Application Server)
-/NAMDAMASCO_APP_ROOT/
-|-- namwoo_app/ # Main application package
-| |-- init.py # App factory (create_app), main app config
-| |-- api/
-| | |-- init.py # Defines 'api_bp' Blueprint, imports route modules
-| | |-- receiver_routes.py # Handles /api/receive-products (enqueues Celery tasks)
-| | |-- routes.py # Handles /api/sb-webhook, /api/health
-| |-- celery_app.py # Celery application setup (with Flask context management)
-| |-- celery_tasks.py # Celery task definitions (product processing, summarization)
-| |-- config/
-| | |-- config.py # Defines Config class, loads .env
-| |-- data/ # Static data, e.g., LLM system prompts
-| | |-- system_prompt.txt
-| |-- models/
-| | |-- init.py # Defines SQLAlchemy Base, imports all models
-| | |-- product.py # Product ORM model (with description, llm_summarized_description)
-| | |-- conversation_pause.py # ConversationPause ORM model
-| |-- services/
-| | |-- init.py # Exposes service functions/modules for easy import
-| | |-- damasco_service.py # Helper for initial processing of raw Damasco data (outputs snake_case)
-| | |-- google_service.py # Google Gemini specific logic (chat, summarization)
-| | |-- openai_service.py # OpenAI specific logic (chat, embedding, summarization)
-| | |-- product_service.py # Core logic for DB ops, vector search, delta detection
-| | |-- support_board_service.py # Platform API interactions (e.g., Nulu AI / Support Board)
-| | |-- sync_service.py # Coordinates bulk data sync (can call Celery or product_service)
-| | |-- llm_processing_service.py # Dispatches summarization to configured LLM provider
-| |-- utils/
-| | |-- init.py
-| | |-- db_utils.py # Database session management, pause logic
-| | |-- embedding_utils.py # Helper for calling embedding models
-| | |-- text_utils.py # Contains strip_html_to_text
-| | |-- product_utils.py # Shared product ID generation logic
-| |-- scheduler/ # APScheduler related tasks (if used for other cron jobs)
-| |-- init.py
-| |-- tasks.py
-|-- data/ # Project-level data (e.g., SQL schema if not using migrations)
-| |-- schema.sql # Must include 'description', 'llm_summarized_description', and 'conversation_pauses' table
-|-- logs/ # Created at runtime for log files
-|-- venv/ # Python virtual environment (.gitignored)
-|-- .env # Environment variables (SECRET! .gitignored)
-|-- .env.example # Example environment variables
-|-- .gitignore
-|-- requirements.txt # Python dependencies (add beautifulsoup4)
-|-- run.py # Entry point for Gunicorn (e.g., run:app which calls create_app)
-|-- gunicorn.conf.py # (Optional) Gunicorn configuration file
-|-- Caddyfile # Example Caddy reverse proxy configuration
-|-- README.md # This file
-*(Note: The `fetcher_scripts/` directory for Damasco data acquisition is considered a separate, complementary project/component that pushes data to this application.)*
+## 📁 Project Structure
+```
+.
+├── CHANGELOG.md
+├── README.md
+├── migrations/
+│   └── 2024Q2_canonicalise_whs_names.sql
+├── namwoo_app/
+│   ├── .env.example
+│   ├── .gitignore
+│   ├── README.md
+│   ├── __init__.py
+│   ├── celery_app.py
+│   ├── celery_tasks.py
+│   ├── requirements.txt
+│   ├── run.py
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── receiver_routes.py
+│   │   └── routes.py
+│   ├── config/
+│   │   ├── __init__.py
+│   │   └── config.py
+│   ├── data/
+│   │   ├── schema.sql
+│   │   ├── store_locations.json
+│   │   ├── store_locations.py
+│   │   └── system_prompt.txt
+│   ├── logs/
+│   │   ├── app.log
+│   │   └── sync.log
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── conversation_pause.py
+│   │   └── product.py
+│   ├── scheduler/
+│   │   ├── __init__.py
+│   │   └── tasks.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── damasco_service.py
+│   │   ├── google_service.py
+│   │   ├── llm_processing_service.py
+│   │   ├── openai_service.py
+│   │   ├── product_service.py
+│   │   ├── support_board_service.py
+│   │   └── sync_service.py
+│   └── utils/
+│       ├── __init__.py
+│       ├── conversation_location.py
+│       ├── db_utils.py
+│       ├── embedding_utils.py
+│       ├── product_utils.py
+│       ├── string_utils.py
+│       ├── text_utils.py
+│       └── whs_utils.py
+├── tests/
+│   ├── test_end_to_end_checkout.py
+│   ├── test_product_utils.py
+│   ├── test_products.py
+│   ├── test_prompt_flow.py
+│   └── test_whatsapp_template.py
+```
+*(The optional `fetcher_scripts/` directory for acquiring Damasco data is maintained as a separate component and pushes updates to this application.)*
 
 ## 🛠️ Setup & Installation Guide (NamDamasco Application Server)
 
