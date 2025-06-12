@@ -543,6 +543,36 @@ def send_reply_to_channel(
         return False
 
 
+def _send_whatsapp_template(
+    phone_e164: str,
+    template_name: str,
+    template_languages: str,
+    parameters: list,
+    phone_id: str | None = None
+) -> bool:
+    """
+    Wrapper for SupportBoard 'whatsapp-send-template'.
+    returns True on success.
+    """
+    if not all([phone_e164, template_name, template_languages, parameters]):
+        logger.error("Missing required params for whatsapp-send-template")
+        return False
+
+    payload = {
+        "function": "whatsapp-send-template",
+        "to": phone_e164,
+        "template_name": template_name,
+        "template_languages": template_languages,
+        "parameters": json.dumps(parameters),
+    }
+    if phone_id:
+        payload["phone_id"] = phone_id
+
+    resp = _call_sb_api(payload)
+    ok = isinstance(resp, dict) and "messages" in resp
+    logger.info("Template send %s for %s", "OK" if ok else "FAILED", phone_e164)
+    return ok
+
 # --- NEW PUBLIC FUNCTIONS: Order Confirmation Template & Sales Routing ---
 def send_order_confirmation_template(user_id: str, conversation_id: str, variables: list):
     """Send WhatsApp order confirmation template with provided variables."""

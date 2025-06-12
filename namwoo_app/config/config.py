@@ -97,6 +97,7 @@ class Config:
     WHATSAPP_PHONE_NUMBER_ID = os.environ.get('WHATSAPP_PHONE_NUMBER_ID')
     WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get('WHATSAPP_DEFAULT_COUNTRY_CODE', '')
     WHATSAPP_API_VERSION = os.environ.get('WHATSAPP_API_VERSION', 'v19.0')
+    WHATSAPP_TEMPLATE_LANGUAGES = os.environ.get('WHATSAPP_TEMPLATE_LANGUAGES', 'es_ES')
 
     # --- Application Specific ---
     MAX_HISTORY_MESSAGES = int(os.environ.get('MAX_HISTORY_MESSAGES', 16))
