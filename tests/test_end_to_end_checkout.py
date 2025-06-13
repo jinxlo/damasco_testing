@@ -68,11 +68,11 @@ spec.loader.exec_module(openai_service)
 def test_end_to_end_checkout(monkeypatch):
     calls = []
 
-    def fake_send(phone, template_name, template_languages, parameters, phone_id=None):
-        calls.append(parameters)
+    def fake_send(**kwargs):
+        calls.append(kwargs.get("parameters"))
         return True
 
-    monkeypatch.setattr(openai_service, "_send_whatsapp_template", fake_send, raising=False)
+    monkeypatch.setattr(openai_service.support_board_service, "send_whatsapp_template", fake_send, raising=False)
 
     res = openai_service._tool_send_whatsapp_order_summary_template(
         customer_platform_user_id="+1234567",

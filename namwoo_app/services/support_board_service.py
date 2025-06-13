@@ -543,80 +543,57 @@ def send_reply_to_channel(
         return False
 
 
-def _send_whatsapp_template(
-    phone_e164: str,
+
+def send_whatsapp_template(
+    to: str,
     template_name: str,
     template_languages: str,
-    parameters: list,
-    phone_id: str | None = None
+    parameters: list[str],
+    recipient_id: Optional[str] = None,
 ) -> bool:
-    """
-    Wrapper for SupportBoard 'whatsapp-send-template'.
-    returns True on success.
-    """
-    if not all([phone_e164, template_name, template_languages, parameters]):
-        logger.error("Missing required params for whatsapp-send-template")
-        return False
+    """Send a WhatsApp template message via the Support Board API."""
 
-    data = {
-        "token": current_app.config.get("SUPPORT_BOARD_API_TOKEN"),
+    body_params_str = ",".join(map(str, parameters))
+    api_parameters_json_string = json.dumps(["", body_params_str, ""])
+
+    payload = {
         "function": "whatsapp-send-template",
-        "to": phone_e164,
+        "to": to.lstrip("+"),
         "template_name": template_name,
         "template_languages": template_languages,
-        "parameters": parameters,
+        "parameters": api_parameters_json_string,
     }
-    if phone_id:
-        data["phone_id"] = phone_id
 
-    api_url = current_app.config.get("SUPPORT_BOARD_API_URL")
-    if not api_url or not data["token"]:
-        logger.error("Support Board API URL or token not configured for WhatsApp template send")
+    if recipient_id:
+        payload["recipient_id"] = recipient_id
+
+    response_data = _call_sb_api(payload)
+
+    if response_data and isinstance(response_data, dict) and response_data.get("messaging_product") == "whatsapp":
+        logger.info(
+            "Successfully sent WhatsApp template '%s' to %s. Message ID: %s",
+            template_name,
+            to,
+            response_data.get("messages", [{}])[0].get("id", "N/A"),
+        )
+        return True
+    elif response_data:
+        logger.error(
+            "Failed to send WhatsApp template '%s' to %s. API did not return expected success structure. Response: %s",
+            template_name,
+            to,
+            response_data,
+        )
         return False
-    try:
-        resp = requests.post(api_url, json=data, timeout=10)
-        resp.raise_for_status()
-        resp_json = resp.json()
-        ok = isinstance(resp_json, dict) and resp_json.get("success") is True
-        logger.info("Template send %s for %s", "OK" if ok else "FAILED", phone_e164)
-        return ok
-    except requests.RequestException as e:
-        logger.error("HTTP error sending WhatsApp template: %s", e, exc_info=True)
-        return False
-    except Exception as e:
-        logger.exception("Unexpected error sending WhatsApp template: %s", e)
+    else:
+        logger.error(
+            "Failed to send WhatsApp template '%s' to %s. _call_sb_api returned None.",
+            template_name,
+            to,
+        )
         return False
 
 # --- NEW PUBLIC FUNCTIONS: Order Confirmation Template & Sales Routing ---
-def send_order_confirmation_template(user_id: str, conversation_id: str, variables: list):
-    """Send WhatsApp order confirmation template with provided variables."""
-    payload = {
-        "function": "messaging-platforms-send-template",
-        "user": {"id": user_id},
-        "conversation_id": conversation_id,
-        "source": {"source": "wa"},
-        "template": {
-            "name": "confirmacion_datos_cliente",
-            "language": "es",
-            "parameters": variables,
-        },
-    }
-    return _call_sb_api(payload)
-
-
-def send_template_by_phone_number(phone_number: str, template_params: list):
-    """Send WhatsApp template using a raw phone number in international format."""
-    payload = {
-        "function": "messaging-platforms-send-template",
-        "source": {"source": "wa"},
-        "phone": phone_number,
-        "template": {
-            "name": "confirmacion_datos_cliente",
-            "language": "es",
-            "parameters": template_params,
-        },
-    }
-    return _call_sb_api(payload)
 
 
 def route_conversation_to_sales(conversation_id: str) -> None:
