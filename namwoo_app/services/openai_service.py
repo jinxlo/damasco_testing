@@ -365,12 +365,13 @@ def _tool_send_whatsapp_order_summary_template(
     exposed to the LLM for function calling. Any changes require updates in
     both places."""
 
-    phone_e164 = f"+{customer_platform_user_id.lstrip('+')}"
-    ok = _send_whatsapp_template(
-        phone_e164,
+    phone_number = customer_platform_user_id
+    ok = support_board_service.send_whatsapp_template(
+        to=phone_number,
         template_name="confirmacion_datos_cliente",
         template_languages="es_ES",
         parameters=template_variables,
+        recipient_id=conversation_id,
     )
     return {"status": "success" if ok else "failed"}
 

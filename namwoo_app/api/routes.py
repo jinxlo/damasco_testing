@@ -18,8 +18,7 @@ from ..services import google_service
 # --- Import Support Board service if needed for error replies ---
 from ..services import support_board_service
 from ..services.support_board_service import (
-    send_order_confirmation_template,
-    send_template_by_phone_number,
+    send_whatsapp_template,
     route_conversation_to_sales,
 )
 # Text utilities
@@ -114,10 +113,12 @@ def handle_support_board_webhook():
     customer_user_id_str = str(customer_user_id_str)
 
     if order_vars and isinstance(order_vars, list) and len(order_vars) == 8:
-        send_order_confirmation_template(
-            user_id=customer_user_id_str,
-            conversation_id=sb_conversation_id_str,
-            variables=order_vars,
+        send_whatsapp_template(
+            to=customer_user_id_str,
+            template_name="confirmacion_datos_cliente",
+            template_languages="es_ES",
+            parameters=order_vars,
+            recipient_id=sb_conversation_id_str,
         )
         route_conversation_to_sales(sb_conversation_id_str)
         return (
@@ -260,9 +261,12 @@ def handle_support_board_webhook():
                 ]
                 phone = str(customer_data.get("telefono", "")).strip()
                 if phone:
-                    send_template_by_phone_number(
-                        phone_number=phone,
-                        template_params=params,
+                    send_whatsapp_template(
+                        to=phone,
+                        template_name="confirmacion_datos_cliente",
+                        template_languages="es_ES",
+                        parameters=params,
+                        recipient_id=sb_conversation_id_str,
                     )
                     route_conversation_to_sales(sb_conversation_id_str)
                     return (

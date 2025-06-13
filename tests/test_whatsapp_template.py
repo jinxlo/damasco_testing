@@ -56,27 +56,21 @@ spec.loader.exec_module(sbs)
 def test_send_whatsapp_template_success(monkeypatch):
     captured = {}
 
-    def fake_post(url, json=None, timeout=10):
-        captured.update(json)
-        class Resp:
-            def raise_for_status(self_inner):
-                pass
-            def json(self_inner):
-                return {"success": True}
-        return Resp()
+    def fake_call(payload):
+        captured.update(payload)
+        return {
+            "messaging_product": "whatsapp",
+            "messages": [{"id": "1"}],
+        }
 
-    monkeypatch.setattr(requests_mod, "post", fake_post)
-    sbs.current_app.config = {
-        'SUPPORT_BOARD_API_URL': 'http://sb.test',
-        'SUPPORT_BOARD_API_TOKEN': 'tkn'
-    }
+    monkeypatch.setattr(sbs, "_call_sb_api", fake_call)
 
-    ok = sbs._send_whatsapp_template(
-        "+1234567890",
-        "foo_template",
-        "es_ES",
-        ["a", "b"],
-        phone_id="1"
+    ok = sbs.send_whatsapp_template(
+        to="+1234567890",
+        template_name="foo_template",
+        template_languages="es_ES",
+        parameters=["a", "b"],
+        recipient_id="1",
     )
     assert ok is True
-    assert captured["parameters"] == ["a", "b"]
+    assert captured["parameters"] == json.dumps(["", "a,b", ""])
