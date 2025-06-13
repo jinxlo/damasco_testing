@@ -323,6 +323,6 @@ A key aspect is distinguishing messages from different sources to ensure correct
 *   **Scalability.**
 *   **Vector Database Optimization.**
 *   **Advanced Location-Based Search/Filtering.** (Price range filtering added, further refinements possible).
-*   **RECOMMENDER_ENABLED flag:** toggle the lightweight product ranking service. Default is `true` in `.env.example`.
+*   **RECOMMENDER_MODE** controls how product results are ordered: `off`, `python`, or `llm`. Using the LLM model yields better relevance but adds ~300ms latency. Example values are in `.env.example`.
 *   **Cost Management.**
 *   **Idempotency.**

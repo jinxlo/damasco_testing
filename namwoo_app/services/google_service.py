@@ -17,10 +17,15 @@ from flask import current_app # Kept as it was in your original file
 # ── Local services ──────────────────────────────────────────────────────────────
 from . import product_service, support_board_service
 try:
-    from .recommender_service import rank_products
-except Exception:  # Fallback for isolated test imports
-    def rank_products(intent, items, top_n=3):
-        return items[:top_n]
+    from . import recommender_service, ranking_llm_service
+except Exception:
+    class _Dummy:
+        @staticmethod
+        def rank_products(intent, items, top_n=3):
+            return items[:top_n]
+
+    recommender_service = _Dummy()
+    ranking_llm_service = _Dummy()
 from ..config import Config
 from ..utils import conversation_location
 # from ..utils.text_utils import strip_html_to_text # Not strictly needed here if llm_processing_service pre-strips
@@ -449,11 +454,13 @@ def process_new_message_gemini_via_openai_lib( # Your original function name
                                 "budget_min": None,
                                 "budget_max": None,
                             }
-                            ranked = (
-                                rank_products(intent_data, search_results_list)
-                                if Config.RECOMMENDER_ENABLED
-                                else search_results_list
-                            )
+                            mode = getattr(Config, "RECOMMENDER_MODE", "off")
+                            if mode == "llm":
+                                ranked = ranking_llm_service.get_ranked_products(intent_data, search_results_list)
+                            elif mode == "python":
+                                ranked = recommender_service.rank_products(intent_data, search_results_list)
+                            else:
+                                ranked = search_results_list
                             tool_content_str = _format_search_results_for_llm(ranked)
                         else:
                             tool_content_str = json.dumps({"status": "error", "message": "Argumento 'query_text' es requerido para search_local_products."}, ensure_ascii=False)
