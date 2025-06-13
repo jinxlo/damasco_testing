@@ -16,6 +16,11 @@ from flask import current_app # Kept as it was in your original file
 
 # ── Local services ──────────────────────────────────────────────────────────────
 from . import product_service, support_board_service
+try:
+    from .recommender_service import rank_products
+except Exception:  # Fallback for isolated test imports
+    def rank_products(intent, items, top_n=3):
+        return items[:top_n]
 from ..config import Config
 from ..utils import conversation_location
 # from ..utils.text_utils import strip_html_to_text # Not strictly needed here if llm_processing_service pre-strips
@@ -435,11 +440,21 @@ def process_new_message_gemini_via_openai_lib( # Your original function name
                         if query:
                             search_results_list = product_service.search_local_products(
                                 query_text=query,
-                                limit=getattr(Config, "PRODUCT_SEARCH_LIMIT", 10), # Use configured limit
+                                limit=getattr(Config, "PRODUCT_SEARCH_LIMIT", 10),
                                 filter_stock=filter_stock_flag,
                                 warehouse_names=warehouse_names_arg,
                             )
-                            tool_content_str = _format_search_results_for_llm(search_results_list)
+                            intent_data = {
+                                "raw_query": query,
+                                "budget_min": None,
+                                "budget_max": None,
+                            }
+                            ranked = (
+                                rank_products(intent_data, search_results_list)
+                                if Config.RECOMMENDER_ENABLED
+                                else search_results_list
+                            )
+                            tool_content_str = _format_search_results_for_llm(ranked)
                         else:
                             tool_content_str = json.dumps({"status": "error", "message": "Argumento 'query_text' es requerido para search_local_products."}, ensure_ascii=False)
                     
