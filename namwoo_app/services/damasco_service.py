@@ -1,6 +1,7 @@
 # NAMWOO/services/damasco_service.py
 import logging
-from decimal import Decimal, InvalidOperation # <<< ADDED for precise price handling
+from decimal import Decimal, InvalidOperation
+from typing import Optional
 
 # Logger for this service
 logger = logging.getLogger('sync')  # Matches sync_service.py logger (or a dedicated one like 'damasco_service')
@@ -56,6 +57,7 @@ def process_damasco_data(raw_data_list: list) -> list:
                 'item_code': str(item.get('itemCode', '')).strip(),
                 'item_name': str(item.get('itemName', '')).strip(),
                 'description': item.get('description'), # Keep as is (raw HTML)
+                'especificacion': item.get('especificacion') or item.get('specification'),
                 'stock': int(item.get('stock', 0)), # Default to 0 if missing/invalid
                 'price': price_usd_decimal, # Store as Decimal (or float if you prefer: float(price_usd_raw or 0.0))
                 'price_bolivar': price_bolivar_decimal, # <<< ADDED new field, store as Decimal

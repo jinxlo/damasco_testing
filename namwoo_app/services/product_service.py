@@ -382,6 +382,9 @@ def add_or_update_product_in_db(
         "item_group_name": _normalize_string(
             damasco_product_data_camel.get("itemGroupName")
         ),
+        "especificacion": _normalize_string(
+            damasco_product_data_camel.get("especificacion")
+        ),
         "warehouse_name": whs_name_raw,
         "branch_name": _normalize_string(damasco_product_data_camel.get("branchName")),
         "price": normalized_price_for_db,
@@ -413,6 +416,7 @@ def add_or_update_product_in_db(
             "brand": insert_stmt.excluded.brand,
             "line": insert_stmt.excluded.line,
             "item_group_name": insert_stmt.excluded.item_group_name,
+            "especificacion": insert_stmt.excluded.especificacion,
             "warehouse_name": insert_stmt.excluded.warehouse_name,
             "branch_name": insert_stmt.excluded.branch_name,
             "price": insert_stmt.excluded.price,
