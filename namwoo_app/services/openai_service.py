@@ -824,6 +824,7 @@ def process_new_message(
                                 ranked = recommender_service.rank_products(intent_data, search_res)
                             else:
                                 ranked = search_res
+                            ranked = ranked[:3]
                             output_txt = _format_search_results_for_llm(ranked)
                         else:
                             output_txt = json.dumps({"status": "error", "message": "Error: 'query_text' es requerido para search_local_products."}, ensure_ascii=False)

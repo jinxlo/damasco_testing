@@ -3,8 +3,10 @@ import sys
 import types
 from pathlib import Path
 
+"""Unit tests for the sales-associate LLM recommender."""
+
 # Dummy openai module
-DUMMY_RESPONSE = '{"ordered_skus": ["B", "A"]}'
+DUMMY_RESPONSE = '{"ordered_skus": ["B", "A", "C", "D"]}'
 
 dummy_openai = types.ModuleType('openai')
 class DummyClient:
@@ -43,13 +45,15 @@ spec.loader.exec_module(ranking_llm)
 get_ranked_products = ranking_llm.get_ranked_products
 
 
-def test_llm_ranking_order():
+def test_sales_associate_recommender_order():
     items = [
         {"item_code": "A"},
         {"item_code": "B"},
         {"item_code": "C"},
+        {"item_code": "D"},
     ]
     intent = {"raw_query": "phone"}
-    ranked = get_ranked_products(intent, items, top_n=2)
-    assert [p["item_code"] for p in ranked] == ["B", "A"]
+    ranked = get_ranked_products(intent, items)
+    assert [p["item_code"] for p in ranked] == ["B", "A", "C"]
+    assert len(ranked) == 3
 
