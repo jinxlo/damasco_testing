@@ -12,10 +12,15 @@ from flask import current_app # For accessing app config like OPENAI_EMBEDDING_M
 from . import product_service
 from . import support_board_service
 try:
-    from .recommender_service import rank_products
-except Exception:  # Fallback for isolated test imports
-    def rank_products(intent, items, top_n=3):
-        return items[:top_n]
+    from . import recommender_service, ranking_llm_service
+except Exception:
+    class _Dummy:
+        @staticmethod
+        def rank_products(intent, items, top_n=3):
+            return items[:top_n]
+
+    recommender_service = _Dummy()
+    ranking_llm_service = _Dummy()
 from ..config import Config # For SYSTEM_PROMPT, MAX_HISTORY_MESSAGES etc.
 from ..utils import embedding_utils
 from ..utils import conversation_location
@@ -812,11 +817,13 @@ def process_new_message(
                                 "budget_min": min_price_arg,
                                 "budget_max": max_price_arg,
                             }
-                            ranked = (
-                                rank_products(intent_data, search_res)
-                                if Config.RECOMMENDER_ENABLED
-                                else search_res
-                            )
+                            mode = getattr(Config, "RECOMMENDER_MODE", "off")
+                            if mode == "llm":
+                                ranked = ranking_llm_service.get_ranked_products(intent_data, search_res)
+                            elif mode == "python":
+                                ranked = recommender_service.rank_products(intent_data, search_res)
+                            else:
+                                ranked = search_res
                             output_txt = _format_search_results_for_llm(ranked)
                         else:
                             output_txt = json.dumps({"status": "error", "message": "Error: 'query_text' es requerido para search_local_products."}, ensure_ascii=False)
