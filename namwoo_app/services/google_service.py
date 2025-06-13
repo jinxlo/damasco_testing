@@ -461,6 +461,7 @@ def process_new_message_gemini_via_openai_lib( # Your original function name
                                 ranked = recommender_service.rank_products(intent_data, search_results_list)
                             else:
                                 ranked = search_results_list
+                            ranked = ranked[:3]
                             tool_content_str = _format_search_results_for_llm(ranked)
                         else:
                             tool_content_str = json.dumps({"status": "error", "message": "Argumento 'query_text' es requerido para search_local_products."}, ensure_ascii=False)

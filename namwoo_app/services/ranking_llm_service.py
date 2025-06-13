@@ -10,8 +10,14 @@ from . import recommender_service
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (
-    "You are a product-ranking expert. Given a shopping intent and a list of candidate products, "
-    "return the SKUs ordered from best to worst in JSON as {\"ordered_skus\": [\"SKU1\", \"SKU2\", ...]}"
+    "SYSTEM:\n"
+    "You are a senior sales associate.\n"
+    "• Input: JSON ➜ {\"intent\": {...}, \"candidates\": [ {sku, name, brand, price, similarity, description} …] } (max 12 items).\n"
+    "• Think like a human salesperson: adapt to any product category, matching the user's needs, budget hints, and brand or feature preferences.\n"
+    "• Return ONLY a JSON object:\n"
+    "  { \"ordered_skus\": [\"SKU1\", \"SKU2\", \"SKU3\" ] }\n"
+    "• List exactly three SKUs, best fit first.\n"
+    "• Do NOT add explanations, extra keys or more than 3 items.\n"
 )
 
 
@@ -44,6 +50,7 @@ def get_ranked_products(intent: Dict[str, Any], items: List[Dict[str, Any]], top
         content = _call_llm(messages, model)
         data = json.loads(content)
         ordered = data.get("ordered_skus", [])
+        ordered = ordered[:3]
         sku_to_item = {it.get("item_code"): it for it in items}
         ranked: List[Dict[str, Any]] = []
         for sku in ordered:
