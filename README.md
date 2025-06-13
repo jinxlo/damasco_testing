@@ -1,22 +1,13 @@
 # 💠 NamDamasco: AI-Powered Sales & Support Assistant 💠
 
-**Version: 1.0.3** 
-**Last Updated:** May 28, 2025 
+**Version: 1.0.4** 
+**Last Updated:** June 11, 2025 
 
 ## 📖 Overview
 
 NamDamasco is an advanced Python Flask web application backend designed to serve as the intelligent core for a multi-channel conversational AI sales and support assistant. It seamlessly integrates with a customer interaction platform (like Nulu AI / Support Board), enabling businesses to offer sophisticated, AI-driven conversations on popular messaging channels like WhatsApp and Instagram (via Facebook Messenger).
 
-The system's primary function is to understand customer inquiries in natural language, search a locally synchronized and enhanced product catalog, provide accurate product information (including details, availability, and pricing), and facilitate a smooth shopping experience. It leverages Large Language Models (LLMs) for natural language understanding and response generation, vector embeddings for semantic product search, and a robust data pipeline for keeping product information up-to-date.
-
-## ⚙️ How It Works (Quick Summary)
-
-1. External *Fetcher Service* sends product data to `/api/receive-products`.
-2. The API validates the payload and enqueues Celery tasks.
-3. Each task enriches data, generates embeddings, and upserts the database.
-4. Users chat via WhatsApp/Instagram; LLM tools search products and reply.
-5. Human agent replies pause the bot for that conversation.
-
+The system's primary function is to understand customer inquiries in natural language, search a locally synchronized and enhanced product catalog, provide accurate product information (including details, availability, and pricing), and facilitate a smooth shopping experience. It leverages Large Language Models (LLMs) for natural language understanding and response generation, vector embeddings for semantic product search, and a robust data pipeline for keeping product information up-to-date. A key part of the sales flow involves collecting essential customer details and sending a WhatsApp template message for order confirmation, after which the conversation is routed to a human sales agent.
 
 ## ✨ Core Strategy & System Architecture
 
@@ -64,24 +55,30 @@ The system relies on an external **Fetcher Service** to acquire product data fro
 ### 2. Semantic Product Search via Vector Embeddings
 
 *   When a user makes a product-related query, NamDamasco converts this query into a vector embedding.
-*   It then performs a cosine similarity search using `pgvector` against the product embeddings in the database.
-*   This allows for finding products based on meaning and context, not just keyword matches.
+*   It then performs a cosine similarity search using `pgvector` against the product embeddings in the database. This search can be filtered by `warehouse_names` (obtained via the `get_store_info` tool based on user's city) and optionally by a price range (if specified by the user and extracted by the LLM).
+*   This allows for finding products based on meaning and context, not just keyword matches, and tailored to location and budget.
 
 ### 3. Intelligent LLM Interaction & Tool Usage for Conversational AI
 
 *   User messages from the support platform are routed to a configured LLM (Google Gemini or OpenAI GPT).
-*   The LLM uses "tools" (functions) to retrieve information:
-    *   **`search_local_products`**: For product discovery via vector search. Returns product details including an LLM-friendly description.
-    *   **`get_live_product_details`**: Retrieves detailed, up-to-date information for a specific product from the local database.
+*   The LLM uses "tools" (functions) to retrieve information and perform actions:
+    *   **`get_store_info`**: Retrieves store locations, addresses, and `whsName` (warehouse identifiers) based on a city name from a local JSON file. This is used to determine relevant stores for local product searches and provide store details.
+    *   **`search_local_products`**: For product discovery via vector search. Can be filtered by `warehouse_names` and a price range (e.g., `min_price`, `max_price`). Returns product details including an LLM-friendly description.
+    *   **`get_live_product_details`**: Retrieves detailed, up-to-date information for a specific product from the local database. Used for final stock checks before order confirmation.
+    *   **`initiate_customer_information_collection`**: Called once the user confirms a product and chooses a non-Cashea payment method. Registers initial lead interest with an external Lead API.
+    *   **`submit_customer_information_for_crm`**: Called after collecting essential customer details (Full Name, Cedula, Phone, Email) to update the lead information via the external Lead API.
+    *   **`send_whatsapp_order_summary_template`**: After all data is collected by the LLM and stock is confirmed, this tool sends a pre-defined WhatsApp template (e.g., `confirmacion_datos_cliente`) to the user's WhatsApp number via the Support Board `messaging-platforms-send-template` API function. This template contains order details for final user confirmation.
+        *   Upon successful sending of this template, the original conversation (e.g., on Instagram or Telegram) is automatically routed to the Sales department within Support Board, and bot interaction is paused for that conversation.
 
 ### 4. Platform Integration (e.g., Nulu AI / Support Board) for Multi-Channel Communication
 
 *   **Incoming Messages:** A webhook endpoint (`/api/sb-webhook`) receives `message-sent` events from users on connected channels (e.g., WhatsApp, Instagram).
 *   **Contextual Enrichment:** NamDamasco can use the platform's API (e.g., Support Board API) to fetch conversation history and user details, providing context to the LLM.
-*   **Outgoing Replies:**
-    *   **WhatsApp:** Bot replies are sent directly via the Meta WhatsApp Cloud API.
+*   **Outgoing Replies & Template Messaging:**
+    *   **WhatsApp (Standard Replies):** Bot replies are sent directly via the Meta WhatsApp Cloud API.
+    *   **WhatsApp (Template Messages):** Order confirmation templates (e.g., `confirmacion_datos_cliente`) are sent via the Support Board `messaging-platforms-send-template` API function, using details collected by the LLM and the customer's Support Board user ID.
     *   **Instagram/Facebook Messenger:** Bot replies are sent through the platform's API (e.g., Support Board's `messenger-send-message`).
-    *   **Dashboard Synchronization:** For all bot replies sent externally, a copy is also logged internally within the platform's conversation using its `send-message` API function. This ensures human agents have full visibility.
+    *   **Dashboard Synchronization:** For all bot replies sent externally (including direct WhatsApp messages and template messages sent via SB), a copy is also logged internally within the platform's conversation using its `send-message` API function. This ensures human agents have full visibility.
 
 ### 5. Differentiating Actors & Human Agent Takeover Logic (Multi-Bot Scenario)
 
@@ -110,6 +107,7 @@ A key aspect is distinguishing messages from different sources to ensure correct
             *   The system first checks the `conversation_pauses` table for an explicit, active pause. If found, the DM Bot does not reply.
             *   If not explicitly paused, it then checks the recent conversation history for *implicit* human takeover. This means looking for the last message not sent by the customer, the DM Bot, or an identified Comment Bot message (using proxy ID and tag if applicable). If such a message is from any other agent ID (a dedicated human agent, or the proxy ID used by a human without the tag), the DM Bot will not reply.
             *   If no explicit pause and no implicit human takeover is detected, the NamDamasco DM Bot proceeds to process the customer's message using the configured LLM.
+            *   **(Note: If the customer replies "Sí" to a WhatsApp order confirmation template, the webhook logic in `api/routes.py` should ideally identify this specific context and route the WhatsApp conversation to the Sales department, potentially pausing further bot replies in that specific WhatsApp thread too.)**
     6.  **Other Senders:** Any other unclassified sender is treated as potential human intervention, and the bot is paused for that conversation as a safety measure.
 
 ## 🚀 Key Features
@@ -118,82 +116,73 @@ A key aspect is distinguishing messages from different sources to ensure correct
 *   📦 **Secure Product Data Receiver:** Authenticated `/api/receive-products` endpoint for ingesting inventory data.
 *   ✨ **Asynchronous & Efficient Product Processing:** Celery-based background processing with delta detection for product updates.
 *   📝 **Advanced Description Handling:** Stores raw HTML, performs conditional LLM-powered summarization, prioritizes summaries for embeddings.
-*   📱 **Direct WhatsApp Cloud API Integration.**
+*   📱 **Direct WhatsApp Cloud API Integration** (for standard bot replies).
+*   💬 **WhatsApp Template Messaging:** Sends pre-approved WhatsApp templates (e.g., for order confirmation) via the Support Board API, populated with data collected by the LLM.
 *   🗣️ **Platform API Integration** for context and replies (e.g., Instagram/Facebook via Support Board).
-*   🔎 **Intelligent Semantic Product Search** using `pgvector`.
-*   🤖 **Advanced LLM Function Calling** (OpenAI/Google) with tools.
+*   🔎 **Intelligent Semantic Product Search** using `pgvector`, with support for filtering by location (via `whsName`) and price range.
+*   🏪 **Dynamic Store Information Retrieval:** LLM uses a tool (`get_store_info`) to query a local JSON file for store details (addresses, `whsName`) based on city.
+*   🤖 **Advanced LLM Function Calling** (OpenAI/Google) with tools for store lookup, product search, live product details, lead/CRM interaction, and sending WhatsApp templates.
+*   📋 **Guided Sales Data Collection:** LLM-driven process to gather essential customer information (name, ID, phone, email) for order processing and template personalization.
+*   ↪️ **Automated Conversation Routing to Sales:** After successfully sending a WhatsApp order confirmation template, the original conversation (e.g., Instagram) is automatically assigned to the Sales department and the bot is paused for that specific conversation.
 *   🐘 **PostgreSQL + `pgvector` Backend.**
 *   🔄 **Decoupled Data Synchronization** via an external Fetcher Service.
 *   🤝 **Differentiated Bot & Human Actor Handling:** Sophisticated logic in the webhook receiver to distinguish between the DM Bot, an external Comment Bot (via a proxy User ID), and actual Human Agents, ensuring appropriate bot behavior.
 *   ⏸️ **Nuanced Human Agent Takeover Pause:** Pauses bot activity upon intervention from recognized human agents (either dedicated accounts or the proxy account if used by a human without specific bot tags) and respects these pauses for customer follow-ups.
-*   ⚙️ **Environment-Based Configuration** via `.env` files for all critical settings.
+*   ⚙️ **Environment-Based Configuration** via `.env` files for all critical settings (including Sales Department ID).
 *   📝 **Structured & Multi-Destination Logging.**
 *   🌍 **Production-Ready Design** for Gunicorn/Caddy/Nginx.
 
-## 📁 Project Structure
-```
-.
-├── CHANGELOG.md
-├── README.md
-├── migrations/
-│   └── 2024Q2_canonicalise_whs_names.sql
-├── namwoo_app/
-│   ├── .env.example
-│   ├── .gitignore
-│   ├── README.md
-│   ├── __init__.py
-│   ├── celery_app.py
-│   ├── celery_tasks.py
-│   ├── requirements.txt
-│   ├── run.py
-│   ├── api/
-│   │   ├── __init__.py
-│   │   ├── receiver_routes.py
-│   │   └── routes.py
-│   ├── config/
-│   │   ├── __init__.py
-│   │   └── config.py
-│   ├── data/
-│   │   ├── schema.sql
-│   │   ├── store_locations.json
-│   │   ├── store_locations.py
-│   │   └── system_prompt.txt
-│   ├── logs/
-│   │   ├── app.log
-│   │   └── sync.log
-│   ├── models/
-│   │   ├── __init__.py
-│   │   ├── conversation_pause.py
-│   │   └── product.py
-│   ├── scheduler/
-│   │   ├── __init__.py
-│   │   └── tasks.py
-│   ├── services/
-│   │   ├── __init__.py
-│   │   ├── damasco_service.py
-│   │   ├── google_service.py
-│   │   ├── llm_processing_service.py
-│   │   ├── openai_service.py
-│   │   ├── product_service.py
-│   │   ├── support_board_service.py
-│   │   └── sync_service.py
-│   └── utils/
-│       ├── __init__.py
-│       ├── conversation_location.py
-│       ├── db_utils.py
-│       ├── embedding_utils.py
-│       ├── product_utils.py
-│       ├── string_utils.py
-│       ├── text_utils.py
-│       └── whs_utils.py
-├── tests/
-│   ├── test_end_to_end_checkout.py
-│   ├── test_product_utils.py
-│   ├── test_products.py
-│   ├── test_prompt_flow.py
-│   └── test_whatsapp_template.py
-```
-*(The optional `fetcher_scripts/` directory for acquiring Damasco data is maintained as a separate component and pushes updates to this application.)*
+## 📁 Folder Structure (NamDamasco Application Server)
+/NAMDAMASCO_APP_ROOT/
+|-- namwoo_app/ # Main application package
+| |-- init.py # App factory (create_app), main app config
+| |-- api/
+| | |-- init.py # Defines 'api_bp' Blueprint, imports route modules
+| | |-- receiver_routes.py # Handles /api/receive-products (enqueues Celery tasks)
+| | |-- routes.py # Handles /api/sb-webhook, /api/health
+| |-- celery_app.py # Celery application setup (with Flask context management)
+| |-- celery_tasks.py # Celery task definitions (product processing, summarization)
+| |-- config/
+| | |-- config.py # Defines Config class, loads .env
+| |-- data/ # Static data, e.g., LLM system prompts, store locations
+| | |-- system_prompt.txt
+| | |-- store_locations.json # NEW: Stores location data for the `get_store_info` tool
+| |-- models/
+| | |-- init.py # Defines SQLAlchemy Base, imports all models
+| | |-- product.py # Product ORM model (with description, llm_summarized_description)
+| | |-- conversation_pause.py # ConversationPause ORM model
+| |-- services/
+| | |-- init.py # Exposes service functions/modules for easy import
+| | |-- damasco_service.py # Helper for initial processing of raw Damasco data (outputs snake_case)
+| | |-- google_service.py # Google Gemini specific logic (chat, summarization)
+| | |-- openai_service.py # OpenAI specific logic (chat, embedding, summarization, tool definitions including `get_store_info` and `send_whatsapp_order_summary_template`)
+| | |-- product_service.py # Core logic for DB ops, vector search (now with price filtering), delta detection
+| | |-- support_board_service.py # Platform API interactions (e.g., Nulu AI / Support Board, including `messaging-platforms-send-template` and `route_conversation_to_sales`)
+| | |-- sync_service.py # Coordinates bulk data sync (can call Celery or product_service)
+| | |-- llm_processing_service.py # Dispatches summarization to configured LLM provider
+| |-- utils/
+| | |-- init.py
+| | |-- db_utils.py # Database session management, pause logic
+| | |-- embedding_utils.py # Helper for calling embedding models
+| | |-- text_utils.py # Contains strip_html_to_text
+| | |-- product_utils.py # Shared product ID generation logic
+| | |-- conversation_location.py # Manages user location context (city, relevant whsNames)
+| |-- scheduler/ # APScheduler related tasks (if used for other cron jobs)
+| |-- init.py
+| |-- tasks.py
+|-- data/ # Project-level data (e.g., SQL schema if not using migrations)
+| |-- schema.sql # Must include 'description', 'llm_summarized_description', and 'conversation_pauses' table
+|-- logs/ # Created at runtime for log files
+|-- venv/ # Python virtual environment (.gitignored)
+|-- .env # Environment variables (SECRET! .gitignored)
+|-- .env.example # Example environment variables
+|-- .gitignore
+|-- requirements.txt # Python dependencies (add beautifulsoup4)
+|-- run.py # Entry point for Gunicorn (e.g., run:app which calls create_app)
+|-- gunicorn.conf.py # (Optional) Gunicorn configuration file
+|-- Caddyfile # Example Caddy reverse proxy configuration
+|-- README.md # This file
+*(Note: The `fetcher_scripts/` directory for Damasco data acquisition is considered a separate, complementary project/component that pushes data to this application.)*
 
 ## 🛠️ Setup & Installation Guide (NamDamasco Application Server)
 
@@ -212,6 +201,7 @@ A key aspect is distinguishing messages from different sources to ensure correct
     *   `DAMASCO_API_SECRET`: A secret key to authenticate requests from your Fetcher Service.
 *   📡 **External Fetcher Service:** Must be set up to fetch raw HTML product descriptions and send them to NamDamasco's `/api/receive-products` endpoint.
 *   🤖 **External Comment Bot (Optional but relevant for full setup):** If using, ensure it sends DMs via the Instagram Page. No direct code changes needed in the Comment Bot itself if relying on proxy ID, unless implementing `COMMENT_BOT_INITIATION_TAG`.
+*   📄 **Store Locations File:** Ensure `namwoo_app/data/store_locations.json` is created and populated with your store details.
 
 ### Installation Steps:
 
@@ -276,6 +266,7 @@ A key aspect is distinguishing messages from different sources to ensure correct
         *   **`SUPPORT_BOARD_AGENT_IDS`**: Comma-separated string of *actual human agent* User IDs from your support platform (e.g., `"3,4,15"`). **Crucially, do not include the DM Bot ID or Comment Bot Proxy ID here.**
         *   **`COMMENT_BOT_INITIATION_TAG`**: (Optional) A unique string your Comment Bot might embed in its DMs. Leave empty if not used.
         *   `HUMAN_TAKEOVER_PAUSE_MINUTES` (e.g., `43200` for 30 days).
+        *   **`SUPPORT_BOARD_SALES_DEPARTMENT_ID`**: The numeric ID of your Sales department in Support Board (e.g., "2").
         *   WhatsApp Cloud API credentials.
         *   `DAMASCO_API_SECRET`.
 
@@ -302,25 +293,20 @@ A key aspect is distinguishing messages from different sources to ensure correct
 
 10. **Test Thoroughly:**
     *   **Data Ingestion & Processing:** (As before)
-    *   **Conversational AI & Tool Use:** (As before)
-    *   **Actor Differentiation & Pause Logic:**
-        *   **Scenario: Comment Bot Initiates -> User Replies -> DM Bot Replies:**
-            1.  User comments on IG.
-            2.  External Comment Bot sends initial DM (seen in Support Board as from `COMMENT_BOT_PROXY_USER_ID`).
-            3.  *Verify: NamDamasco logs this, DM Bot does not reply to this message, no pause is set.*
-            4.  User replies to this DM.
-            5.  *Verify: NamDamasco DM Bot identifies customer reply, sees no active pause, determines no overriding human intervention (recognizing Comment Bot's message is not human), and replies.*
-        *   **Scenario: Human Agent (Dedicated Account) Intervenes:**
-            1.  After any bot interaction, a human agent (with User ID from `SUPPORT_BOARD_AGENT_IDS`) replies via the support platform.
-            2.  *Verify: NamDamasco DM Bot receives this webhook, identifies it as a dedicated human agent, and sets a pause for the conversation in the `conversation_pauses` table.*
-            3.  User replies again.
-            4.  *Verify: NamDamasco DM Bot sees the active pause and does not reply.*
-        *   **Scenario: Human Admin (Using Proxy ID "1") Intervenes:**
-            1.  If `COMMENT_BOT_INITIATION_TAG` is configured:
-                *   Admin (as User "1") sends a DM *without* the tag. *Verify: NamDamasco treats as human intervention and pauses.*
-            2.  If `COMMENT_BOT_INITIATION_TAG` is *not* configured:
-                *   Admin (as User "1") sends a DM. *Verify (based on current logic): NamDamasco may treat this as the Comment Bot and *not* pause. This highlights the importance of the tag or strict rules for User "1".*
-        *   **Scenario: Direct DM from User -> DM Bot -> Human Agent -> User -> No DM Bot Reply:** (As before)
+    *   **Conversational AI & Tool Use:**
+        *   Test `get_store_info` tool by asking for stores in a city.
+        *   Test `search_local_products` with and without `warehouse_names`, and with queries that include price ranges.
+        *   Test `get_live_product_details`.
+    *   **WhatsApp Template Flow:**
+        1.  User expresses interest in a product and chooses "Pago de Contado" or "Pagar en Tienda".
+        2.  Bot collects Name, Cedula, Phone, Email.
+        3.  Verify the `initiate_customer_information_collection` and `submit_customer_information_for_crm` tools are called in the correct order.
+        4.  Verify `get_live_product_details` is called for stock check.
+        5.  Verify the `send_whatsapp_order_summary_template` tool is called by the LLM.
+        6.  Verify the WhatsApp template message is received by the user with correctly populated variables (including derived store address for pickup, or generic shipping message).
+        7.  Verify the original conversation (e.g., Instagram) is routed to the Sales Department in Support Board and the bot is paused for that conversation.
+        8.  Test the scenario where the user replies "Sí" to the WhatsApp template (this part of the routing would be handled by your webhook logic in `api/routes.py` to route the WhatsApp conversation itself to Sales).
+    *   **Actor Differentiation & Pause Logic:** (As before)
     *   **Database Verification:** Check `products` (for descriptions, summaries, embeddings) and `conversation_pauses` tables.
 
 11. **Production Deployment:**
@@ -328,6 +314,7 @@ A key aspect is distinguishing messages from different sources to ensure correct
 
 ## 💡 Important Considerations & Future Enhancements
 
+*   **WhatsApp Template Management:** Ensure the `confirmacion_datos_cliente` template is approved by Meta and correctly set up in your WhatsApp Business API / Support Board integration. Parameter order and count must match what the `send_whatsapp_order_summary_template` tool prepares. El campo "Dirección" de esa plantilla debe contener **solo** la sucursal donde se retirará el producto, nunca la dirección del cliente.
 *   **Error Handling & Resilience.**
 *   **API Rate Limits.**
 *   **Security:**
@@ -335,6 +322,6 @@ A key aspect is distinguishing messages from different sources to ensure correct
     *   Emphasize distinct User IDs for human agents. If the `COMMENT_BOT_PROXY_USER_ID` (e.g., User "1") *must* also be used by a human admin for DMs, implementing the `COMMENT_BOT_INITIATION_TAG` in the Comment Bot's DMs is highly recommended for accurate differentiation by NamDamasco.
 *   **Scalability.**
 *   **Vector Database Optimization.**
-*   **Advanced Location-Based Search/Filtering.**
+*   **Advanced Location-Based Search/Filtering.** (Price range filtering added, further refinements possible).
 *   **Cost Management.**
 *   **Idempotency.**
