@@ -157,7 +157,7 @@ class Product(Base):
             ),  # <<< NEW FIELD ADDED
             "stock": self.stock,
             "searchable_text_content": self.searchable_text_content,
-            # "source_data_json": self.source_data_json, # Often too verbose for general dicts unless specifically requested
+            "source_data_json": self.source_data_json,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

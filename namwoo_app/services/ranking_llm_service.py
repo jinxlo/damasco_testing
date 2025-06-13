@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 _SYSTEM_PROMPT = (
     "SYSTEM:\n"
     "You are a senior sales associate.\n"
-    "• Input: JSON ➜ {\"intent\": {...}, \"candidates\": [ {sku, name, brand, price, similarity, description} …] } (max 12 items).\n"
+    "• Input: JSON ➜ {\"intent\": {...}, \"candidates\": [ {full product data with sku, name, brand, price, similarity, description, etc.} …] } (max 12 items).\n"
     "• Think like a human salesperson: adapt to any product category, matching the user's needs, budget hints, and brand or feature preferences.\n"
     "• Return ONLY a JSON object:\n"
     "  { \"ordered_skus\": [\"SKU1\", \"SKU2\", \"SKU3\" ] }\n"
