@@ -52,6 +52,11 @@ class Product(Base):
     llm_summarized_description = Column(
         Text, nullable=True, comment="LLM-generated summary of the description"
     )
+    especificacion = Column(
+        Text,
+        nullable=True,
+        comment="Detailed product specifications",
+    )
 
     # Descriptive attributes
     category = Column(
@@ -134,6 +139,7 @@ class Product(Base):
             "item_name": self.item_name,
             "description": self.description,
             "llm_summarized_description": self.llm_summarized_description,
+            "especificacion": self.especificacion,
             "plain_text_description_derived": strip_html_to_text(
                 self.description or ""
             ),
@@ -188,11 +194,17 @@ class Product(Base):
             else "Descripción no disponible."
         )
 
+        spec_str = (
+            f" Especificaciones: {self.especificacion.strip()}"
+            if self.especificacion and self.especificacion.strip()
+            else ""
+        )
+
         base_info = (
             f"{self.item_name or 'Producto sin nombre'} "
             f"(Marca: {self.brand or 'N/A'}, "
             f"Categoría: {self.category or 'N/A'}). "
-            f"{price_str}{price_bolivar_str}. {desc_str_for_llm}"
+            f"{price_str}{price_bolivar_str}. {desc_str_for_llm}{spec_str}"
         )  # <<< MODIFIED to include price_bolivar_str
 
         if include_stock_location:
@@ -257,6 +269,8 @@ class Product(Base):
 
         if description_content_for_embedding:  # Add only if it's not empty
             add_part(description_content_for_embedding)
+
+        add_part(damasco_product_data.get("especificacion"))
 
         add_part(damasco_product_data.get("category"))
         add_part(damasco_product_data.get("subCategory"))

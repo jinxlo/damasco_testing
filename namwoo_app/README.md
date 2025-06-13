@@ -43,13 +43,13 @@ The system relies on an external **Fetcher Service** to acquire product data fro
         *   This crucial step constructs the `searchable_text_content`.
         *   It **prioritizes the `llm_generated_summary`**. If a summary is available, it's used as the primary descriptive component.
         *   If no LLM summary is available, it falls back to using the plain text obtained by stripping the raw HTML description.
-        *   This processed description is then concatenated with other key product attributes (brand, name, category, etc.) to form the final `text_to_embed`.
+        *   This processed description is then concatenated with other key product attributes (brand, name, category, **especificacion**, etc.) to form the final `text_to_embed`.
     5.  **Vector Embedding Generation (`openai_service.generate_product_embedding()`):**
         *   The `text_to_embed` is converted into a high-dimensional numerical vector (embedding).
     6.  **Database Upsert with Delta Detection (`product_service.add_or_update_product_in_db()`):**
         *   Efficiently updates PostgreSQL, comparing new processed values against existing records.
         *   **If no significant changes are detected**, the database write operation is skipped.
-        *   If changes are found, or if the item is new, relevant fields including `description` (raw HTML), `llm_summarized_description`, `searchable_text_content`, and `embedding_vector` are stored/updated.
+        *   If changes are found, or if the item is new, relevant fields including `description` (raw HTML), `especificacion`, `llm_summarized_description`, `searchable_text_content`, and `embedding_vector` are stored/updated.
         *   The original `damasco_product_data` is stored in `source_data_json` for auditing.
 
 ### 2. Semantic Product Search via Vector Embeddings
@@ -149,7 +149,7 @@ A key aspect is distinguishing messages from different sources to ensure correct
 | | |-- store_locations.json # NEW: Stores location data for the `get_store_info` tool
 | |-- models/
 | | |-- init.py # Defines SQLAlchemy Base, imports all models
-| | |-- product.py # Product ORM model (with description, llm_summarized_description)
+| | |-- product.py # Product ORM model (with description, especificacion, llm_summarized_description)
 | | |-- conversation_pause.py # ConversationPause ORM model
 | |-- services/
 | | |-- init.py # Exposes service functions/modules for easy import
@@ -171,7 +171,7 @@ A key aspect is distinguishing messages from different sources to ensure correct
 | |-- init.py
 | |-- tasks.py
 |-- data/ # Project-level data (e.g., SQL schema if not using migrations)
-| |-- schema.sql # Must include 'description', 'llm_summarized_description', and 'conversation_pauses' table
+| |-- schema.sql # Must include 'description', 'especificacion', 'llm_summarized_description', and 'conversation_pauses' table
 |-- logs/ # Created at runtime for log files
 |-- venv/ # Python virtual environment (.gitignored)
 |-- .env # Environment variables (SECRET! .gitignored)
@@ -199,7 +199,7 @@ A key aspect is distinguishing messages from different sources to ensure correct
     *   Support Platform (e.g., Nulu AI) installation/account with API token.
     *   LLM Provider API Key (OpenAI API Key and/or Google AI API Key for Gemini).
     *   `DAMASCO_API_SECRET`: A secret key to authenticate requests from your Fetcher Service.
-*   📡 **External Fetcher Service:** Must be set up to fetch raw HTML product descriptions and send them to NamDamasco's `/api/receive-products` endpoint.
+*   📡 **External Fetcher Service:** Must be set up to fetch raw HTML product descriptions and specification details, sending them to NamDamasco's `/api/receive-products` endpoint.
 *   🤖 **External Comment Bot (Optional but relevant for full setup):** If using, ensure it sends DMs via the Instagram Page. No direct code changes needed in the Comment Bot itself if relying on proxy ID, unless implementing `COMMENT_BOT_INITIATION_TAG`.
 *   📄 **Store Locations File:** Ensure `namwoo_app/data/store_locations.json` is created and populated with your store details.
 

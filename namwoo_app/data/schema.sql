@@ -22,6 +22,7 @@ CREATE TABLE products (
     brand VARCHAR(128),                  -- Brand of the product
     line VARCHAR(128),                   -- Product line (from Damasco)
     item_group_name VARCHAR(128),        -- Broader group name (from Damasco)
+    especificacion TEXT,
 
     -- Location-specific attributes for this entry
     warehouse_name VARCHAR(255) NOT NULL, -- Warehouse name (from Damasco's 'whsName')

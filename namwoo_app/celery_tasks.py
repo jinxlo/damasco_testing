@@ -30,6 +30,7 @@ class DamascoProductDataSnake(BaseModel):
     stock: int
     price: Optional[Decimal] = None # Will be Decimal after validation
     price_bolivar: Optional[Decimal] = None # <<< NEW FIELD: Will be Decimal after validation
+    especificacion: Optional[str] = None  # New field for detailed specs
     category: Optional[str] = None
     sub_category: Optional[str] = None
     brand: Optional[str] = None
@@ -78,6 +79,7 @@ def _convert_snake_to_camel_case(data_snake: Dict[str, Any]) -> Dict[str, Any]:
         "brand": "brand",
         "line": "line",
         "item_group_name": "itemGroupName",
+        "especificacion": "especificacion",
         "warehouse_name": "whsName", # Pydantic model has 'warehouse_name'
         "branch_name": "branchName",
     }
@@ -202,7 +204,8 @@ def process_product_item_task(self, product_data_dict_snake: Dict[str, Any]):
         with db_utils.get_db_session() as read_session:
             try:
                 existing_product_db_entry = read_session.query(
-                    Product.description, 
+                    Product.description,
+                    Product.especificacion,
                     Product.llm_summarized_description,
                     Product.searchable_text_content,
                     Product.embedding
@@ -211,6 +214,7 @@ def process_product_item_task(self, product_data_dict_snake: Dict[str, Any]):
                 if existing_product_db_entry:
                     existing_product_details = {
                         "description": existing_product_db_entry.description,
+                        "especificacion": existing_product_db_entry.especificacion,
                         "llm_summarized_description": existing_product_db_entry.llm_summarized_description,
                         "searchable_text_content": existing_product_db_entry.searchable_text_content,
                         "embedding": existing_product_db_entry.embedding 
