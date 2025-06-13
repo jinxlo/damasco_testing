@@ -323,5 +323,6 @@ A key aspect is distinguishing messages from different sources to ensure correct
 *   **Scalability.**
 *   **Vector Database Optimization.**
 *   **Advanced Location-Based Search/Filtering.** (Price range filtering added, further refinements possible).
+*   **RECOMMENDER_ENABLED flag:** toggle the lightweight product ranking service. Default is `true` in `.env.example`.
 *   **Cost Management.**
 *   **Idempotency.**

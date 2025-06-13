@@ -11,6 +11,11 @@ from flask import current_app # For accessing app config like OPENAI_EMBEDDING_M
 # Import local services and utils
 from . import product_service
 from . import support_board_service
+try:
+    from .recommender_service import rank_products
+except Exception:  # Fallback for isolated test imports
+    def rank_products(intent, items, top_n=3):
+        return items[:top_n]
 from ..config import Config # For SYSTEM_PROMPT, MAX_HISTORY_MESSAGES etc.
 from ..utils import embedding_utils
 from ..utils import conversation_location
@@ -796,12 +801,22 @@ def process_new_message(
                                 query_text=query,
                                 filter_stock=filter_stock_flag,
                                 warehouse_names=warehouse_names_arg,
-                                min_price=min_price_arg, # Pass min_price
-                                max_price=max_price_arg,  # Pass max_price
+                                min_price=min_price_arg,
+                                max_price=max_price_arg,
                                 sort_by_price_asc=cheapest_intent,
                                 exclude_accessories=generic_intent
                             )
-                            output_txt = _format_search_results_for_llm(search_res)
+                            intent_data = {
+                                "raw_query": query,
+                                "budget_min": min_price_arg,
+                                "budget_max": max_price_arg,
+                            }
+                            ranked = (
+                                rank_products(intent_data, search_res)
+                                if Config.RECOMMENDER_ENABLED
+                                else search_res
+                            )
+                            output_txt = _format_search_results_for_llm(ranked)
                         else:
                             output_txt = json.dumps({"status": "error", "message": "Error: 'query_text' es requerido para search_local_products."}, ensure_ascii=False)
                     

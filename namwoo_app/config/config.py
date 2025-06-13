@@ -102,6 +102,7 @@ class Config:
     # --- Application Specific ---
     MAX_HISTORY_MESSAGES = int(os.environ.get('MAX_HISTORY_MESSAGES', 16))
     PRODUCT_SEARCH_LIMIT = max(5, int(os.environ.get('PRODUCT_SEARCH_LIMIT', 10)))
+    RECOMMENDER_ENABLED = os.environ.get('RECOMMENDER_ENABLED', 'true').lower() == 'true'
 
     # --- Damasco Specific ---
     DAMASCO_RECEIVER_API_URL = os.environ.get('DAMASCO_RECEIVER_API_URL')
