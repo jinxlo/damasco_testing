@@ -15,6 +15,11 @@ from . import product_recommender
 from ..config import Config # For SYSTEM_PROMPT, MAX_HISTORY_MESSAGES etc.
 from ..utils import embedding_utils
 from ..utils import conversation_location
+try:  # Optional import for testing environments
+    from ..utils.whs_utils import canonicalize_whs_name
+except Exception:  # pragma: no cover - fallback for stripped test modules
+    def canonicalize_whs_name(name):
+        return name
 import re
 
 
@@ -424,7 +429,7 @@ tools_schema = [
                     "warehouse_names": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Set this to the user’s city/branch to only show products available there.",
+                        "description": "List of `whsName` values returned from `get_store_info`. Do NOT use `branchName` or city names. Use values like 'Almacen Principal CCCT'.",
                     },
                     "min_price": {
                         "type": "number",
@@ -768,6 +773,13 @@ def process_new_message(
                             user_city = conversation_location.get_conversation_city(sb_conversation_id)
                             if user_city:
                                 args["warehouse_names"] = conversation_location.get_warehouses_for_city(user_city)
+                        if "warehouse_names" in args and args["warehouse_names"]:
+                            logger.warning(
+                                f"LLM provided warehouse_names: {args['warehouse_names']} (before canonicalization)"
+                            )
+                            args["warehouse_names"] = [
+                                canonicalize_whs_name(n) for n in args["warehouse_names"]
+                            ]
                         candidate_products = product_service.search_local_products(**args)
                         if Config.RECOMMENDER_MODE == 'llm' and candidate_products:
                             logger.info(f"Re-ranking {len(candidate_products)} candidates...")
