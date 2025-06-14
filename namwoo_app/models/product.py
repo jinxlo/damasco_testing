@@ -131,9 +131,18 @@ class Product(Base):
             f"warehouse='{self.warehouse_name}', stock={self.stock})>"
         )
 
-    def to_dict(self) -> Dict[str, Any]:  # Explicitly typing return dict
-        """Returns a dictionary representation of the product-location entry."""
-        return {
+    def to_dict(self, include_source: bool = False) -> Dict[str, Any]:
+        """Return a dictionary representation of the product-location entry.
+
+        Parameters
+        ----------
+        include_source:
+            If ``True`` the original ``source_data_json`` column will be
+            included in the returned dictionary.  This field can be quite
+            verbose so it is omitted by default.
+        """
+
+        data = {
             "id": self.id,
             "item_code": self.item_code,
             "item_name": self.item_name,
@@ -157,10 +166,14 @@ class Product(Base):
             ),  # <<< NEW FIELD ADDED
             "stock": self.stock,
             "searchable_text_content": self.searchable_text_content,
-            # "source_data_json": self.source_data_json, # Often too verbose for general dicts unless specifically requested
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+        if include_source:
+            data["source_data_json"] = self.source_data_json
+
+        return data
 
     def format_for_llm(self, include_stock_location: bool = True) -> str:
         """Formats product information for presentation by an LLM, prioritizing LLM summary."""
