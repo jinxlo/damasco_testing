@@ -446,6 +446,14 @@ tools_schema = [
                         "type": "number",
                         "description": "Opcional. El precio máximo del producto en USD para filtrar la búsqueda."
                     },
+                    "sort_by": {
+                        "type": "string",
+                        "description": "Opcional. 'price_asc' para ordenar de menor a mayor precio o 'price_desc' para el inverso."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Opcional. Número máximo de resultados a retornar."
+                    },
                 },
                 "required": ["query_text"],
             },
@@ -805,11 +813,12 @@ def process_new_message(
                         if query:
                             search_res = product_service.search_local_products(
                                 query_text=query,
+                                limit=getattr(Config, "PRODUCT_SEARCH_LIMIT", 10),
                                 filter_stock=filter_stock_flag,
                                 warehouse_names=warehouse_names_arg,
                                 min_price=min_price_arg,
                                 max_price=max_price_arg,
-                                sort_by_price_asc=cheapest_intent,
+                                sort_by="price_asc" if cheapest_intent else None,
                                 exclude_accessories=generic_intent
                             )
                             intent_data = {

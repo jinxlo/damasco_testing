@@ -11,8 +11,7 @@ SYSTEM_PROMPT_PATH = Path(os.path.dirname(__file__)).parent / "namwoo_app" / "da
 
 def test_prompt_contains_snippet_and_no_leak_paragraphs():
     text = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
-    snippet = "¡Entendido! 😊\n\n¿Qué tipo de producto estás buscando hoy?"
-    assert snippet in text
+    assert "CRITICAL PRIORITY RULE" not in text
     assert "Ahora tengo la información" not in text
     assert "En Caracas tenemos varias sucursales" not in text
 

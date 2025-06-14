@@ -51,11 +51,11 @@ def search_local_products(
     query_text: str,
     limit: int = 30,
     filter_stock: bool = True,
-    min_score: float = 0.01,  # MODIFIED: Lowered min_score for diagnostics
+    min_score: float = 0.01,
     warehouse_names: Optional[List[str]] = None,
     min_price: Optional[Union[float, int, str]] = None,
     max_price: Optional[Union[float, int, str]] = None,
-    sort_by_price_asc: bool = False,
+    sort_by: Optional[str] = None,
     exclude_accessories: bool = False,
 ) -> Optional[List[Dict[str, Any]]]:
     if not query_text or not isinstance(query_text, str):
@@ -75,14 +75,14 @@ def search_local_products(
         log_message_parts.append(f"min_price={min_price}")
     if max_price is not None:
         log_message_parts.append(f"max_price={max_price}")
-    if sort_by_price_asc:
-        log_message_parts.append("sort_by_price_asc=True")
+    if sort_by:
+        log_message_parts.append(f"sort_by={sort_by}")
     if exclude_accessories:
         log_message_parts.append("exclude_accessories=True")
 
     logger.info(", ".join(log_message_parts))
     logger.debug(
-        "search_local_products args - query_text=%s, limit=%s, filter_stock=%s, min_score=%s, warehouses=%s, min_price=%s, max_price=%s, sort_by_price_asc=%s, exclude_accessories=%s",
+        "search_local_products args - query_text=%s, limit=%s, filter_stock=%s, min_score=%s, warehouses=%s, min_price=%s, max_price=%s, sort_by=%s, exclude_accessories=%s",
         query_text,
         limit,
         filter_stock,
@@ -90,7 +90,7 @@ def search_local_products(
         warehouse_names,
         min_price,
         max_price,
-        sort_by_price_asc,
+        sort_by,
         exclude_accessories,
     )
 
@@ -191,8 +191,10 @@ def search_local_products(
             q_final = q_final.filter(
                 (1 - Product.embedding.cosine_distance(query_emb)) >= min_score
             )
-            if sort_by_price_asc:
+            if sort_by == "price_asc":
                 q_final = q_final.order_by(Product.price.asc()).limit(limit)
+            elif sort_by == "price_desc":
+                q_final = q_final.order_by(Product.price.desc()).limit(limit)
             else:
                 q_final = q_final.order_by(
                     Product.embedding.cosine_distance(query_emb)
@@ -200,6 +202,17 @@ def search_local_products(
 
             rows: List[Tuple[Product, float]] = q_final.all()
             logger.debug("DB returned %d rows after final filters", len(rows))
+
+            if rows:
+                top_sim = float(rows[0][1])
+                threshold = getattr(Config, "MIN_SIMILARITY_SCORE", 0.70)
+                if top_sim < threshold:
+                    logger.info(
+                        "Top similarity %.4f below threshold %.2f; returning empty list.",
+                        top_sim,
+                        threshold,
+                    )
+                    return []
             results: List[Dict[str, Any]] = []
             for prod_location_entry, sim_score in rows:
                 item_dict = prod_location_entry.to_dict(include_source=True)
@@ -231,7 +244,7 @@ def search_local_products(
                     warehouse_names=warehouse_names,
                     min_price=min_price,
                     max_price=max_price,
-                    sort_by_price_asc=sort_by_price_asc,
+                    sort_by=sort_by,
                     exclude_accessories=exclude_accessories,
                 )
             if not results:
