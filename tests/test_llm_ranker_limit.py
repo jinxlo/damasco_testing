@@ -37,12 +37,12 @@ config_pkg.Config = DummyConfig
 sys.modules.setdefault('namwoo_app.services', types.ModuleType('namwoo_app.services'))
 sys.modules.setdefault('namwoo_app.services.recommender_service', types.ModuleType('rs'))
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / 'namwoo_app' / 'services' / 'ranking_llm_service.py'
-spec = importlib.util.spec_from_file_location('ranking_llm_service', MODULE_PATH)
-ranking_llm = importlib.util.module_from_spec(spec)
-ranking_llm.__package__ = 'namwoo_app.services'
-spec.loader.exec_module(ranking_llm)
-get_ranked_products = ranking_llm.get_ranked_products
+MODULE_PATH = Path(__file__).resolve().parents[1] / 'namwoo_app' / 'services' / 'recommender_service.py'
+spec = importlib.util.spec_from_file_location('recommender_service', MODULE_PATH)
+recommender = importlib.util.module_from_spec(spec)
+recommender.__package__ = 'namwoo_app.services'
+spec.loader.exec_module(recommender)
+get_ranked_products = recommender.get_ranked_products
 
 
 def test_sales_associate_recommender_order():

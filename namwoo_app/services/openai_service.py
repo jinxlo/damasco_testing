@@ -16,7 +16,7 @@ try:
 except Exception:
     class _Dummy:
         @staticmethod
-        def rank_products(intent, items, top_n=3):
+        def get_ranked_products(intent, items, top_n=3):
             return items[:top_n]
 
     recommender_service = _Dummy()
@@ -453,6 +453,10 @@ tools_schema = [
                         "type": "integer",
                         "description": "Opcional. Número máximo de resultados a retornar."
                     },
+                    "min_score": {
+                        "type": "number",
+                        "description": "Opcional. Umbral mínimo de similitud para aceptar un resultado. Valor por defecto 0.35.",
+                    },
                 },
                 "required": ["query_text"],
             },
@@ -796,6 +800,7 @@ def process_new_message(
                         warehouse_names_arg = args.get("warehouse_names")
                         min_price_arg = args.get("min_price")
                         max_price_arg = args.get("max_price")
+                        min_score_arg = args.get("min_score")
                         cheapest_intent = bool(query and user_is_asking_for_cheapest(query))
                         generic_intent = bool(query and _GENERIC_PRODUCT_PAT.fullmatch(query.strip()))
 
@@ -824,6 +829,7 @@ def process_new_message(
                                 warehouse_names=warehouse_names_arg,
                                 min_price=min_price_arg,
                                 max_price=max_price_arg,
+                                min_score=min_score_arg,
                                 sort_by="price_asc" if cheapest_intent else None,
                                 exclude_accessories=generic_intent
                             )

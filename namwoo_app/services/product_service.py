@@ -52,7 +52,7 @@ def search_local_products(
     query_text: str,
     limit: int = 30,
     filter_stock: bool = True,
-    min_score: float = 0.01,
+    min_score: float = 0.35,
     warehouse_names: Optional[List[str]] = None,
     min_price: Optional[Union[float, int, str]] = None,
     max_price: Optional[Union[float, int, str]] = None,
@@ -174,6 +174,12 @@ def search_local_products(
                     f"Stock: {prod_entry_diag.stock}, Warehouse: {prod_entry_diag.warehouse_name}"
                 )
 
+            logger.info(
+                f"[VECTOR SEARCH] Top similarity score: {diagnostic_rows[0][1]:.4f}"
+                if diagnostic_rows
+                else "[VECTOR SEARCH] Top similarity score: No results"
+            )
+
             # Reconstruct query with min_score filter for actual results
             q_final = session.query(
                 Product,
@@ -204,18 +210,14 @@ def search_local_products(
             rows: List[Tuple[Product, float]] = q_final.all()
             logger.debug("DB returned %d rows after final filters", len(rows))
 
-            if rows:
-                top_sim = float(rows[0][1])
-                threshold = getattr(Config, "MIN_SIMILARITY_SCORE", 0.70)
-                if top_sim < threshold:
-                    logger.info(
-                        "Top similarity %.4f below threshold %.2f; returning empty list.",
-                        top_sim,
-                        threshold,
-                    )
-                    return []
+            final_rows = rows
+            if not final_rows and diagnostic_rows:
+                logger.warning(
+                    f"Top similarity {diagnostic_rows[0][1]:.4f} was below threshold {min_score}. Returning fallback result."
+                )
+                final_rows = diagnostic_rows[:1]
             results: List[Dict[str, Any]] = []
-            for prod_location_entry, sim_score in rows:
+            for prod_location_entry, sim_score in final_rows:
                 item_dict = prod_location_entry.to_dict(include_source=True)
                 item_dict.update(
                     {
@@ -255,13 +257,15 @@ def search_local_products(
                 )
                 return []
 
+            logger.info(f"[VECTOR SEARCH] Results returned: {len(results)}")
+
             logger.info(
                 "Vector search returned %d product location entries.", len(results)
             )
 
             logger.info(f"[RECOMMENDER] Filtered warehouses: {warehouse_names}")
             logger.info(f"[RECOMMENDER] Raw matches: {len(results)}")
-            ranked = recommender_service.rank_products(
+            ranked = recommender_service.get_ranked_products(
                 intent={"raw_query": query_text}, items=results, top_n=3
             )
             logger.info(
