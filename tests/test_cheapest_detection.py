@@ -52,6 +52,7 @@ sys.modules.setdefault('namwoo_app.services.product_service', types.ModuleType('
 sys.modules.setdefault('namwoo_app.services.support_board_service', types.ModuleType('sb'))
 sys.modules.setdefault('namwoo_app.utils.embedding_utils', types.ModuleType('eu'))
 sys.modules.setdefault('namwoo_app.utils.conversation_location', types.ModuleType('cl'))
+sys.modules.setdefault('namwoo_app.services.product_recommender', types.ModuleType('pr'))
 
 config_pkg = types.ModuleType('namwoo_app.config')
 config_pkg.__path__ = []

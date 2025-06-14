@@ -35,25 +35,31 @@ sys.modules['namwoo_app.config.config'] = config_mod
 sys.modules['namwoo_app.config'] = config_pkg
 config_pkg.Config = DummyConfig
 sys.modules.setdefault('namwoo_app.services', types.ModuleType('namwoo_app.services'))
-sys.modules.setdefault('namwoo_app.services.recommender_service', types.ModuleType('rs'))
+sys.modules.setdefault('namwoo_app.services.product_recommender', types.ModuleType('pr'))
+conv_mod = sys.modules.setdefault('namwoo_app.utils.conversation_location', types.SimpleNamespace())
+setattr(conv_mod, 'get_warehouses_for_city', lambda city: [])
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / 'namwoo_app' / 'services' / 'recommender_service.py'
-spec = importlib.util.spec_from_file_location('recommender_service', MODULE_PATH)
+MODULE_PATH = Path(__file__).resolve().parents[1] / 'namwoo_app' / 'services' / 'product_recommender.py'
+spec = importlib.util.spec_from_file_location('product_recommender', MODULE_PATH)
 recommender = importlib.util.module_from_spec(spec)
 recommender.__package__ = 'namwoo_app.services'
 spec.loader.exec_module(recommender)
 get_ranked_products = recommender.get_ranked_products
 
 
-def test_sales_associate_recommender_order():
+def test_sales_associate_recommender_order(monkeypatch):
     items = [
         {"item_code": "A"},
         {"item_code": "B"},
         {"item_code": "C"},
         {"item_code": "D"},
     ]
-    intent = {"raw_query": "phone"}
-    ranked = get_ranked_products(intent, items)
-    assert [p["item_code"] for p in ranked] == ["B", "A", "C"]
-    assert len(ranked) == 3
+    dummy_ps = types.SimpleNamespace(
+        search_local_products=lambda **kw: items,
+        get_color_variants_for_sku=lambda code: []
+    )
+    monkeypatch.setattr(recommender, "product_service", dummy_ps)
+    ranked = get_ranked_products({"query": "phone"}, city="Caracas")
+    assert [p["item_code"] for p in ranked[:3]] == ["B", "A", "C"]
+    assert len(ranked[:3]) == 3
 
