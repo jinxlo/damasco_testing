@@ -769,10 +769,15 @@ def process_new_message(
                         brands = product_service.get_available_brands(**args)
                         output_content_json = json.dumps({"status": "success", "brands": brands})
                     elif fn_name == "search_local_products":
-                        if "warehouse_names" not in args:
-                            user_city = conversation_location.get_conversation_city(sb_conversation_id)
-                            if user_city:
-                                args["warehouse_names"] = conversation_location.get_warehouses_for_city(user_city)
+                        # --- START OF CONTEXT AWARENESS LOGIC ---
+                        user_city = conversation_location.get_conversation_city(sb_conversation_id)
+                        if user_city and 'warehouse_names' not in args:
+                            logger.info(
+                                f"Context Injection: LLM forgot location. Injecting warehouse names for city: '{user_city}'"
+                            )
+                            args['warehouse_names'] = conversation_location.get_warehouses_for_city(user_city)
+                        # --- END OF CONTEXT AWARENESS LOGIC ---
+
                         if "warehouse_names" in args and args["warehouse_names"]:
                             logger.warning(
                                 f"LLM provided warehouse_names: {args['warehouse_names']} (before canonicalization)"
@@ -781,6 +786,7 @@ def process_new_message(
                                 canonicalize_whs_name(n) for n in args["warehouse_names"]
                             ]
                         candidate_products = product_service.search_local_products(**args)
+
                         if Config.RECOMMENDER_MODE == 'llm' and candidate_products:
                             logger.info(f"Re-ranking {len(candidate_products)} candidates...")
                             full_intent = args.get('query_text', '')
