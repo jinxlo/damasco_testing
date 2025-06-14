@@ -9,6 +9,9 @@ from . import recommender_service
 
 logger = logging.getLogger(__name__)
 
+# Initialize a shared OpenAI client for ranking calls
+_llm_client: OpenAI = OpenAI(api_key=Config.OPENAI_API_KEY, timeout=3.0)
+
 _SYSTEM_PROMPT = (
     "SYSTEM:\n"
     "You are a senior sales associate.\n"
@@ -22,8 +25,7 @@ _SYSTEM_PROMPT = (
 
 
 def _call_llm(messages: List[Dict[str, str]], model: str) -> str:
-    client = OpenAI(api_key=Config.OPENAI_API_KEY, timeout=3.0)
-    response = client.chat.completions.create(
+    response = _llm_client.chat.completions.create(
         model=model,
         messages=messages,
         temperature=0,

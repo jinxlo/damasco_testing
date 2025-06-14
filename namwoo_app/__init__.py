@@ -76,8 +76,13 @@ def create_app(config_class=Config):
 
     # Initialize components like database for THIS app instance
     from .utils import db_utils
-    db_utils.init_db(app) # Ensure init_db is idempotent or handles being called for multiple app instances
-                         # (e.g., one for web, one for Celery's context via its own create_app call)
+    db_utils.init_db(app)  # Ensure init_db is idempotent or handles being called for multiple app instances
+
+    @app.teardown_appcontext
+    def shutdown_session(exception=None):
+        """Ensure DB sessions are removed after each request."""
+        if db_utils.ScopedSessionFactory:
+            db_utils.ScopedSessionFactory.remove()
 
     logger.info("Dependent services (like OpenAI client) will be initialized as needed or at module level within their respective service files.")
 

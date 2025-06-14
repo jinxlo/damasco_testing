@@ -11,6 +11,10 @@ from ..config import Config
 
 logger = logging.getLogger(__name__)
 
+# Use a shared session for all Support Board API calls. Some tests mock the
+# requests module and may not provide Session, so fall back gracefully.
+sb_api_session = requests.Session() if hasattr(requests, "Session") else requests
+
 # --- PRIVATE HELPER: Make Support Board API Call ---
 # (Kept unchanged)
 def _call_sb_api(payload: Dict) -> Optional[Any]:
@@ -35,7 +39,7 @@ def _call_sb_api(payload: Dict) -> Optional[Any]:
     logger.debug(f"Payload for {function_name} (requests data param): {log_payload_str}")
 
     try:
-        response = requests.post(api_url, data=payload, timeout=20)
+        response = sb_api_session.post(api_url, data=payload, timeout=20)
         response.raise_for_status()
         response_json = response.json()
         try:
@@ -343,7 +347,7 @@ def _send_whatsapp_cloud_api(recipient_waid: str, message_text: str) -> bool:
     except Exception: logger.debug(f"Direct WhatsApp API Payload (fallback log): {str(payload_dict)}")
 
     try:
-        response = requests.post(api_url, headers=headers, json=payload_dict, timeout=30)
+        response = sb_api_session.post(api_url, headers=headers, json=payload_dict, timeout=30)
         response.raise_for_status()
         response_json = response.json()
         try: log_response_str = json.dumps(response_json)
