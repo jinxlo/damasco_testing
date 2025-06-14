@@ -22,7 +22,7 @@ try:
 except Exception:
     class _Dummy:
         @staticmethod
-        def rank_products(intent, items, top_n=3):
+        def get_ranked_products(intent, items, top_n=3):
             return items[:top_n]
 
     recommender_service = _Dummy()
@@ -183,6 +183,10 @@ tools_schema = [
                     "limit": {
                         "type": "integer",
                         "description": "Opcional. Número máximo de resultados a retornar.",
+                    },
+                    "min_score": {
+                        "type": "number",
+                        "description": "Opcional. Umbral mínimo de similitud para aceptar un resultado. Valor por defecto 0.35.",
                     },
                 },
                 "required": ["query_text"],
@@ -456,6 +460,7 @@ def process_new_message_gemini_via_openai_lib( # Your original function name
                         query = args.get("query_text")
                         filter_stock_flag = args.get("filter_stock", True) # Default as per schema
                         warehouse_names_arg = args.get("warehouse_names")
+                        min_score_arg = args.get("min_score")
                         if not warehouse_names_arg:
                             warehouse_names_arg = conversation_location.get_city_warehouses(sb_conversation_id)
                         if query:
@@ -466,6 +471,7 @@ def process_new_message_gemini_via_openai_lib( # Your original function name
                                 filter_stock=filter_stock_flag,
                                 warehouse_names=warehouse_names_arg,
                                 sort_by="price_asc" if cheapest_intent else None,
+                                min_score=min_score_arg,
                             )
                             tool_content_str = _format_search_results_for_llm(search_results_list)
                         else:
