@@ -12,7 +12,7 @@ from flask import current_app # For accessing app config like OPENAI_EMBEDDING_M
 from . import product_service
 from . import support_board_service
 try:
-    from . import recommender_service, ranking_llm_service
+    from . import recommender_service
 except Exception:
     class _Dummy:
         @staticmethod
@@ -20,7 +20,6 @@ except Exception:
             return items[:top_n]
 
     recommender_service = _Dummy()
-    ranking_llm_service = _Dummy()
 from ..config import Config # For SYSTEM_PROMPT, MAX_HISTORY_MESSAGES etc.
 from ..utils import embedding_utils
 from ..utils import conversation_location
@@ -724,7 +723,13 @@ def process_new_message(
     final_assistant_response: Optional[str] = None
     try:
         tool_call_count = 0
-        while tool_call_count <= TOOL_CALL_RETRY_LIMIT:
+        while True:
+            if tool_call_count > TOOL_CALL_RETRY_LIMIT:
+                logger.warning(
+                    f"Tool call retry limit ({TOOL_CALL_RETRY_LIMIT}) strictly exceeded for Conv {sb_conversation_id}. Breaking loop."
+                )
+                break
+
             abort_tool_calls = False
             openai_model = current_app.config.get("OPENAI_CHAT_MODEL", DEFAULT_OPENAI_MODEL)
             max_tokens = current_app.config.get("OPENAI_MAX_TOKENS", DEFAULT_MAX_TOKENS)
@@ -802,16 +807,14 @@ def process_new_message(
                         if not warehouse_names_arg:
                             user_city = conversation_location.get_conversation_city(sb_conversation_id)
                             if user_city:
-                                logger.info(f"LLM did not provide warehouse_names for search. Fetching for city '{user_city}' from context for Conv {sb_conversation_id}.")
-                                store_info_json_str = _tool_get_store_info(city_name=user_city)
-                                store_info_data = json.loads(store_info_json_str)
-                                if store_info_data.get("status") == "success" and store_info_data.get("stores"):
-                                    warehouse_names_arg = [s.get("whsName") for s in store_info_data["stores"] if s.get("whsName")]
-                                    logger.info(f"Using whsNames for city '{user_city}': {warehouse_names_arg}")
-                                else:
-                                    logger.warning(f"Could not retrieve whsNames for city '{user_city}' to aid search. Proceeding without specific whsNames.")
+                                warehouse_names_arg = conversation_location.get_warehouses_for_city(user_city)
+                                logger.info(
+                                    f"LLM did not provide warehouse_names. Using city '{user_city}' warehouses: {warehouse_names_arg}"
+                                )
                             else:
-                                logger.info(f"No city in context and no warehouse_names provided by LLM for search in Conv {sb_conversation_id}. Product search will be national or un-filtered by warehouse.")
+                                logger.info(
+                                    f"No city in context and no warehouse_names provided by LLM for search in Conv {sb_conversation_id}. Product search will be national or un-filtered by warehouse."
+                                )
 
                         if query:
                             search_res = product_service.search_local_products(
@@ -824,20 +827,7 @@ def process_new_message(
                                 sort_by="price_asc" if cheapest_intent else None,
                                 exclude_accessories=generic_intent
                             )
-                            intent_data = {
-                                "raw_query": query,
-                                "budget_min": min_price_arg,
-                                "budget_max": max_price_arg,
-                            }
-                            mode = getattr(Config, "RECOMMENDER_MODE", "off")
-                            if mode == "llm":
-                                ranked = ranking_llm_service.get_ranked_products(intent_data, search_res)
-                            elif mode == "python":
-                                ranked = recommender_service.rank_products(intent_data, search_res)
-                            else:
-                                ranked = search_res
-                            ranked = ranked[:3]
-                            output_txt = _format_search_results_for_llm(ranked)
+                            output_txt = _format_search_results_for_llm(search_res)
                         else:
                             output_txt = json.dumps({"status": "error", "message": "Error: 'query_text' es requerido para search_local_products."}, ensure_ascii=False)
 
@@ -915,13 +905,15 @@ def process_new_message(
                 logger.info("Forcing chained `search_local_products` call.")
 
                 product_intent_query = None
-                for msg in reversed(messages[:-1]):
-                    if msg.get("role") == "user" and not conversation_location.detect_city_from_text(msg.get("content")):
-                        product_intent_query = msg.get("content")
-                        break
+                for msg in reversed(openai_history):
+                    if msg.get("role") == "user":
+                        content = msg.get("content", "")
+                        if content and not conversation_location.detect_city_from_text(content):
+                            product_intent_query = content
+                            break
 
                 if product_intent_query:
-                    logger.info(f"Found product intent for chained call: '{product_intent_query}'")
+                    logger.info(f"Chained call triggered. Found product intent: '{product_intent_query}'")
                     search_res = product_service.search_local_products(
                         query_text=product_intent_query,
                         warehouse_names=warehouse_names_from_stores
@@ -940,10 +932,10 @@ def process_new_message(
                         }]
                     }
                     forced_tool_result = {
-                        "tool_call_id": "forced_search_1",
                         "role": "tool",
+                        "tool_call_id": "forced_search_1",
                         "name": "search_local_products",
-                        "content": _redact_store_details(search_output)
+                        "content": search_output,
                     }
                     messages.append(fake_assistant_call)
                     messages.append(forced_tool_result)
@@ -954,10 +946,6 @@ def process_new_message(
 
             messages.extend(tool_outputs_for_llm)
             tool_call_count += 1
-
-            if tool_call_count > TOOL_CALL_RETRY_LIMIT and not final_assistant_response:
-                logger.warning(f"Tool call retry limit ({TOOL_CALL_RETRY_LIMIT}) strictly exceeded for Conv {sb_conversation_id}. Breaking loop.")
-                break
 
             if abort_tool_calls:
                 break

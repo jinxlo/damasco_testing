@@ -18,7 +18,7 @@ from flask import current_app # Kept as it was in your original file
 from . import product_service, support_board_service
 from .openai_service import user_is_asking_for_cheapest
 try:
-    from . import recommender_service, ranking_llm_service
+    from . import recommender_service
 except Exception:
     class _Dummy:
         @staticmethod
@@ -26,7 +26,6 @@ except Exception:
             return items[:top_n]
 
     recommender_service = _Dummy()
-    ranking_llm_service = _Dummy()
 from ..config import Config
 from ..utils import conversation_location
 # from ..utils.text_utils import strip_html_to_text # Not strictly needed here if llm_processing_service pre-strips
@@ -468,20 +467,7 @@ def process_new_message_gemini_via_openai_lib( # Your original function name
                                 warehouse_names=warehouse_names_arg,
                                 sort_by="price_asc" if cheapest_intent else None,
                             )
-                            intent_data = {
-                                "raw_query": query,
-                                "budget_min": None,
-                                "budget_max": None,
-                            }
-                            mode = getattr(Config, "RECOMMENDER_MODE", "off")
-                            if mode == "llm":
-                                ranked = ranking_llm_service.get_ranked_products(intent_data, search_results_list)
-                            elif mode == "python":
-                                ranked = recommender_service.rank_products(intent_data, search_results_list)
-                            else:
-                                ranked = search_results_list
-                            ranked = ranked[:3]
-                            tool_content_str = _format_search_results_for_llm(ranked)
+                            tool_content_str = _format_search_results_for_llm(search_results_list)
                         else:
                             tool_content_str = json.dumps({"status": "error", "message": "Argumento 'query_text' es requerido para search_local_products."}, ensure_ascii=False)
                     
