@@ -41,6 +41,7 @@ utils_pkg.__path__ = []
 sys.modules.setdefault('namwoo_app.utils', utils_pkg)
 sys.modules.setdefault('namwoo_app.utils.embedding_utils', types.ModuleType('eu'))
 sys.modules.setdefault('namwoo_app.utils.conversation_location', types.ModuleType('cl'))
+sys.modules.setdefault('namwoo_app.services.product_recommender', types.ModuleType('pr'))
 config_pkg = types.ModuleType('namwoo_app.config')
 config_mod = types.ModuleType('namwoo_app.config.config')
 class DummyConfig:

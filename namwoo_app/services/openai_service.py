@@ -11,15 +11,7 @@ from flask import current_app # For accessing app config like OPENAI_EMBEDDING_M
 # Import local services and utils
 from . import product_service
 from . import support_board_service
-try:
-    from . import recommender_service
-except Exception:
-    class _Dummy:
-        @staticmethod
-        def get_ranked_products(intent, items, top_n=3):
-            return items[:top_n]
-
-    recommender_service = _Dummy()
+from . import product_recommender
 from ..config import Config # For SYSTEM_PROMPT, MAX_HISTORY_MESSAGES etc.
 from ..utils import embedding_utils
 from ..utils import conversation_location
@@ -417,8 +409,8 @@ tools_schema = [
                     "query_text": {
                         "type": "string",
                         "description": (
-                            "Consulta del usuario describiendo el producto. "
-                            "Ej: 'televisor inteligente de 55 pulgadas', 'neveras Samsung'."
+                            "What the user is looking for, like 'phone for gaming' or 'cheap washing machine'. "
+                            "Avoid pricing words; use 'sort_by' instead."
                         ),
                     },
                     "filter_stock": {
@@ -432,22 +424,19 @@ tools_schema = [
                     "warehouse_names": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": (
-                            "Opcional. Lista de nombres de almacén (`whsName`) para filtrar la búsqueda de productos. "
-                            "Obtén estos nombres usando la herramienta `get_store_info` basada en la ciudad del usuario."
-                        ),
+                        "description": "Set this to the user’s city/branch to only show products available there.",
                     },
                     "min_price": {
                         "type": "number",
-                        "description": "Opcional. El precio mínimo del producto en USD para filtrar la búsqueda."
+                        "description": "Use if user provides a price range or max budget."
                     },
                     "max_price": {
                         "type": "number",
-                        "description": "Opcional. El precio máximo del producto en USD para filtrar la búsqueda."
+                        "description": "Use if user provides a price range or max budget."
                     },
                     "sort_by": {
                         "type": "string",
-                        "description": "Opcional. 'price_asc' para ordenar de menor a mayor precio o 'price_desc' para el inverso."
+                        "description": "Use 'price_asc' for queries like 'cheapest', 'most affordable'. Use 'price_desc' for 'most expensive'. Otherwise use 'relevance'."
                     },
                     "limit": {
                         "type": "integer",
@@ -822,16 +811,15 @@ def process_new_message(
                                 )
 
                         if query:
-                            search_res = product_service.search_local_products(
-                                query_text=query,
-                                limit=getattr(Config, "PRODUCT_SEARCH_LIMIT", 10),
-                                filter_stock=filter_stock_flag,
-                                warehouse_names=warehouse_names_arg,
-                                min_price=min_price_arg,
-                                max_price=max_price_arg,
-                                min_score=min_score_arg,
-                                sort_by="price_asc" if cheapest_intent else None,
-                                exclude_accessories=generic_intent
+                            intent_data = {
+                                "query": query,
+                                "budget_min": min_price_arg,
+                                "budget_max": max_price_arg,
+                                "sort_by": "price_asc" if cheapest_intent else None,
+                            }
+                            search_res = product_recommender.get_ranked_products(
+                                intent=intent_data,
+                                city=user_city or "",
                             )
                             output_txt = _format_search_results_for_llm(search_res)
                         else:
@@ -920,9 +908,9 @@ def process_new_message(
 
                 if product_intent_query:
                     logger.info(f"Chained call triggered. Found product intent: '{product_intent_query}'")
-                    search_res = product_service.search_local_products(
-                        query_text=product_intent_query,
-                        warehouse_names=warehouse_names_from_stores
+                    search_res = product_recommender.get_ranked_products(
+                        intent={"query": product_intent_query},
+                        city=conversation_location.get_conversation_city(sb_conversation_id) or "",
                     )
                     search_output = _format_search_results_for_llm(search_res)
 

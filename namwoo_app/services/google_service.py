@@ -17,15 +17,7 @@ from flask import current_app # Kept as it was in your original file
 # ── Local services ──────────────────────────────────────────────────────────────
 from . import product_service, support_board_service
 from .openai_service import user_is_asking_for_cheapest
-try:
-    from . import recommender_service
-except Exception:
-    class _Dummy:
-        @staticmethod
-        def get_ranked_products(intent, items, top_n=3):
-            return items[:top_n]
-
-    recommender_service = _Dummy()
+from . import product_recommender
 from ..config import Config
 from ..utils import conversation_location
 # from ..utils.text_utils import strip_html_to_text # Not strictly needed here if llm_processing_service pre-strips
