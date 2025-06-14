@@ -104,6 +104,8 @@ class Config:
     PRODUCT_SEARCH_LIMIT = max(5, int(os.environ.get('PRODUCT_SEARCH_LIMIT', 10)))
     MIN_SIMILARITY_SCORE = float(os.environ.get('MIN_SIMILARITY_SCORE', 0.35))
     RECOMMENDER_ENABLED = os.environ.get('RECOMMENDER_ENABLED', 'true').lower() == 'true'
+    RECOMMENDER_MODE = os.environ.get('RECOMMENDER_MODE', 'off').lower()
+    RECOMMENDER_LLM_MODEL = os.environ.get('RECOMMENDER_LLM_MODEL', 'gpt-4o-mini')
 
     # --- Damasco Specific ---
     DAMASCO_RECEIVER_API_URL = os.environ.get('DAMASCO_RECEIVER_API_URL')
