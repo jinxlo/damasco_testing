@@ -21,12 +21,14 @@ logger = logging.getLogger(__name__)
 _engine = None
 _SessionFactory = None
 _ScopedSessionFactory = None
+# Expose the scoped session factory for external teardown usage
+ScopedSessionFactory = None
 
 def init_db(app) -> bool:
     """
     Initialize the SQLAlchemy engine and session factories using app config.
     """
-    global _engine, _SessionFactory, _ScopedSessionFactory
+    global _engine, _SessionFactory, _ScopedSessionFactory, ScopedSessionFactory
 
     db_uri = app.config.get('SQLALCHEMY_DATABASE_URI')
     if not db_uri:
@@ -49,16 +51,21 @@ def init_db(app) -> bool:
 
         _SessionFactory = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
         _ScopedSessionFactory = scoped_session(_SessionFactory)
+        # mirror public alias for teardown hooks
+        global ScopedSessionFactory
+        ScopedSessionFactory = _ScopedSessionFactory
         logger.info("SQLAlchemy SessionFactory and ScopedSessionFactory initialized successfully.")
         return True
 
     except OperationalError as oe:
         logger.error(f"Database connection failed (OperationalError): {oe}", exc_info=True)
         _engine = None; _SessionFactory = None; _ScopedSessionFactory = None
+        ScopedSessionFactory = None
         return False
     except Exception as e:
         logger.error(f"Database initialization failed: {e}", exc_info=True)
         _engine = None; _SessionFactory = None; _ScopedSessionFactory = None
+        ScopedSessionFactory = None
         return False
 
 @contextmanager
