@@ -202,7 +202,7 @@ def search_local_products(
             logger.debug("DB returned %d rows after final filters", len(rows))
             results: List[Dict[str, Any]] = []
             for prod_location_entry, sim_score in rows:
-                item_dict = prod_location_entry.to_dict()
+                item_dict = prod_location_entry.to_dict(include_source=True)
                 item_dict.update(
                     {
                         "similarity": round(float(sim_score), 4),
@@ -487,7 +487,7 @@ def get_live_product_details_by_sku(
                     f"No product entries found with item_code: {normalized_item_code}"
                 )
                 return []
-            results = [entry.to_dict() for entry in product_entries]
+            results = [entry.to_dict(include_source=True) for entry in product_entries]
             logger.info(
                 f"Found {len(results)} locations for item_code: {normalized_item_code}"
             )
@@ -517,7 +517,7 @@ def get_live_product_details_by_id(composite_id: str) -> Optional[Dict[str, Any]
             if not product_entry:
                 logger.info(f"No product entry found with composite_id: {composite_id}")
                 return None
-            return product_entry.to_dict()
+            return product_entry.to_dict(include_source=True)
         except SQLAlchemyError as db_exc:
             logger.exception(
                 f"DB error fetching product by composite_id: {composite_id}, Error: {db_exc}"
