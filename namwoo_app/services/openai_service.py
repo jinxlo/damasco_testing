@@ -724,7 +724,44 @@ def process_new_message(
     final_assistant_response: Optional[str] = None
     try:
         tool_call_count = 0
+        just_got_store_info = False
+        last_product_query: Optional[str] = None
         while tool_call_count <= TOOL_CALL_RETRY_LIMIT:
+            if just_got_store_info and last_product_query:
+                logger.info("STATE: `get_store_info` succeeded. Forcing `search_local_products` call.")
+                tool_result_message = messages[-1]
+                try:
+                    tool_content = json.loads(tool_result_message.get("content", "{}"))
+                    warehouse_names = [s.get("whsName") for s in tool_content.get("stores", []) if s.get("whsName")]
+                except (json.JSONDecodeError, AttributeError):
+                    warehouse_names = None
+
+                search_res = product_service.search_local_products(
+                    query_text=last_product_query,
+                    limit=getattr(Config, "PRODUCT_SEARCH_LIMIT", 10),
+                    filter_stock=True,
+                    warehouse_names=warehouse_names,
+                )
+                intent_data = {"raw_query": last_product_query, "budget_min": None, "budget_max": None}
+                mode = getattr(Config, "RECOMMENDER_MODE", "off")
+                if mode == "llm":
+                    ranked = ranking_llm_service.get_ranked_products(intent_data, search_res)
+                elif mode == "python":
+                    ranked = recommender_service.rank_products(intent_data, search_res)
+                else:
+                    ranked = search_res
+                ranked = ranked[:3]
+                output_txt = _format_search_results_for_llm(ranked)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": "forced_call_1",
+                    "name": "search_local_products",
+                    "content": _redact_store_details(output_txt),
+                })
+                just_got_store_info = False
+                last_product_query = None
+                tool_call_count += 1
+                continue
             abort_tool_calls = False
             openai_model = current_app.config.get("OPENAI_CHAT_MODEL", DEFAULT_OPENAI_MODEL)
             max_tokens = current_app.config.get("OPENAI_MAX_TOKENS", DEFAULT_MAX_TOKENS)
@@ -778,6 +815,21 @@ def process_new_message(
                     if fn_name == "get_store_info":
                         city_arg = args.get("city_name")
                         output_txt = _tool_get_store_info(city_name=city_arg)
+                        try:
+                            output_data = json.loads(output_txt)
+                            if output_data.get("status") == "success" and output_data.get("stores"):
+                                just_got_store_info = True
+                                if openai_history:
+                                    last_user_message = next(
+                                        (msg['content'] for msg in reversed(openai_history) if msg['role'] == 'user'),
+                                        None,
+                                    )
+                                    last_product_query = last_user_message
+                                logger.info(
+                                    f"STATE: `get_store_info` was successful. Flag set to True. Product query remembered: '{last_product_query}'"
+                                )
+                        except (json.JSONDecodeError, KeyError):
+                            just_got_store_info = False
                     
                     elif fn_name == "search_local_products":
                         query = args.get("query_text")
