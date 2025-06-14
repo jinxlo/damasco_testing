@@ -8,7 +8,7 @@ from decimal import InvalidOperation as InvalidDecimalOperation
 from typing import Any, Dict, List, Optional, Tuple, Union  # Added Union
 
 import numpy as np
-from sqlalchemy import func, literal_column
+from sqlalchemy import func, literal_column, distinct
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -262,9 +262,7 @@ def search_local_products(
                 "Vector search returned %d product location entries.", len(results)
             )
 
-            logger.info(f"[RECOMMENDER] Filtered warehouses: {warehouse_names}")
-            logger.info(f"[RECOMMENDER] Raw matches: {len(results)}")
-            return results[:3]
+            return results
         except SQLAlchemyError as db_exc:
             logger.exception("Database error during product search: %s", db_exc)
             return None
@@ -586,3 +584,13 @@ def get_color_variants_for_sku(item_code_query: str) -> Optional[List[str]]:
                 "Unexpected error fetching color variants for %s: %s", base_code, exc
             )
             return None
+
+
+def get_available_brands(category: Optional[str] = None) -> List[str]:
+    """Returns a list of unique product brands, optionally filtered by category."""
+    with db_utils.get_db_session() as session:
+        query = session.query(distinct(Product.brand))
+        if category:
+            query = query.filter(Product.category.ilike(f"%{category}%"))
+        results = query.order_by(Product.brand).all()
+        return [row[0] for row in results if row[0]]
