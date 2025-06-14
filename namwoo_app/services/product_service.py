@@ -17,6 +17,7 @@ from ..config import Config  # For Config.OPENAI_EMBEDDING_MODEL
 from ..models.product import Product  # Product model used for ORM and Product.to_dict()
 from ..utils import db_utils, embedding_utils, product_utils  # product_utils for variant helpers
 from ..utils.whs_utils import canonicalize_whs
+from . import recommender_service
 
 logger = logging.getLogger(__name__)  # Standard logger for this module
 
@@ -247,15 +248,26 @@ def search_local_products(
                     sort_by=sort_by,
                     exclude_accessories=exclude_accessories,
                 )
+
             if not results:
                 logger.info(
                     "Vector search completed but no products matched the criteria."
                 )
-            else:
-                logger.info(
-                    "Vector search returned %d product location entries.", len(results)
-                )
-            return results
+                return []
+
+            logger.info(
+                "Vector search returned %d product location entries.", len(results)
+            )
+
+            logger.info(f"[RECOMMENDER] Filtered warehouses: {warehouse_names}")
+            logger.info(f"[RECOMMENDER] Raw matches: {len(results)}")
+            ranked = recommender_service.rank_products(
+                intent={"raw_query": query_text}, items=results, top_n=3
+            )
+            logger.info(
+                f"[RECOMMENDER] Top recommendations: {[r['item_name'] for r in ranked]}"
+            )
+            return ranked
         except SQLAlchemyError as db_exc:
             logger.exception("Database error during product search: %s", db_exc)
             return None
