@@ -724,44 +724,7 @@ def process_new_message(
     final_assistant_response: Optional[str] = None
     try:
         tool_call_count = 0
-        just_got_store_info = False
-        last_product_query: Optional[str] = None
         while tool_call_count <= TOOL_CALL_RETRY_LIMIT:
-            if just_got_store_info and last_product_query:
-                logger.info("STATE: `get_store_info` succeeded. Forcing `search_local_products` call.")
-                tool_result_message = messages[-1]
-                try:
-                    tool_content = json.loads(tool_result_message.get("content", "{}"))
-                    warehouse_names = [s.get("whsName") for s in tool_content.get("stores", []) if s.get("whsName")]
-                except (json.JSONDecodeError, AttributeError):
-                    warehouse_names = None
-
-                search_res = product_service.search_local_products(
-                    query_text=last_product_query,
-                    limit=getattr(Config, "PRODUCT_SEARCH_LIMIT", 10),
-                    filter_stock=True,
-                    warehouse_names=warehouse_names,
-                )
-                intent_data = {"raw_query": last_product_query, "budget_min": None, "budget_max": None}
-                mode = getattr(Config, "RECOMMENDER_MODE", "off")
-                if mode == "llm":
-                    ranked = ranking_llm_service.get_ranked_products(intent_data, search_res)
-                elif mode == "python":
-                    ranked = recommender_service.rank_products(intent_data, search_res)
-                else:
-                    ranked = search_res
-                ranked = ranked[:3]
-                output_txt = _format_search_results_for_llm(ranked)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": "forced_call_1",
-                    "name": "search_local_products",
-                    "content": _redact_store_details(output_txt),
-                })
-                just_got_store_info = False
-                last_product_query = None
-                tool_call_count += 1
-                continue
             abort_tool_calls = False
             openai_model = current_app.config.get("OPENAI_CHAT_MODEL", DEFAULT_OPENAI_MODEL)
             max_tokens = current_app.config.get("OPENAI_MAX_TOKENS", DEFAULT_MAX_TOKENS)
@@ -770,17 +733,14 @@ def process_new_message(
             call_params: Dict[str, Any] = {
                 "model": openai_model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature,
             }
-            
-            if tool_call_count < TOOL_CALL_RETRY_LIMIT and not (messages[-1].get("role") == "tool"):
-                 call_params["tools"] = tools_schema 
+
+            if tool_call_count < TOOL_CALL_RETRY_LIMIT:
+                 call_params["tools"] = tools_schema
                  call_params["tool_choice"] = "auto"
-            else: 
-                call_params.pop("tools", None)
-                call_params.pop("tool_choice", None)
 
             logger.debug(f"OpenAI API call attempt {tool_call_count + 1} for Conv {sb_conversation_id}. Tools offered: {'tools' in call_params}")
             response = _chat_client.chat.completions.create(**call_params)
-            response_message = response.choices[0].message 
+            response_message = response.choices[0].message
 
             if response.usage:
                  logger.info(f"OpenAI Tokens (Conv {sb_conversation_id}, Attempt {tool_call_count+1}): Prompt={response.usage.prompt_tokens}, Completion={response.usage.completion_tokens}, Total={response.usage.total_tokens}")
@@ -791,26 +751,28 @@ def process_new_message(
             if not tool_calls:
                 final_assistant_response = response_message.content
                 logger.info(f"OpenAI response (no tool call this turn) for Conv {sb_conversation_id}: '{str(final_assistant_response)[:200]}...'")
-                break 
+                break
 
-            tool_outputs_for_llm: List[Dict[str, str]] = [] 
+            tool_outputs_for_llm: List[Dict[str, Any]] = []
+            warehouse_names_from_stores = None
+
             for tc in tool_calls:
                 fn_name = tc.function.name
-                tool_call_id = tc.id 
-                args_str = "" 
+                tool_call_id = tc.id
+                args_str = ""
                 try:
                     args_str = tc.function.arguments
                     args = json.loads(args_str)
                     args = sanitize_tool_args(args, sb_conversation_id)
                 except json.JSONDecodeError as json_err:
                     logger.error(f"JSONDecodeError for tool {fn_name} args (Conv {sb_conversation_id}): {args_str}. Error: {json_err}")
-                    args = {} 
+                    args = {}
                     output_txt = json.dumps({"status": "error", "message": f"Error: Argumentos para {fn_name} no son JSON válido: {args_str}"}, ensure_ascii=False)
-                else: 
-                    output_txt = json.dumps({"status":"error", "message":f"Error: Falló la ejecución de la herramienta {fn_name}."}, ensure_ascii=False) 
-                
+                else:
+                    output_txt = json.dumps({"status":"error", "message":f"Error: Falló la ejecución de la herramienta {fn_name}."}, ensure_ascii=False)
+
                 logger.info(f"OpenAI requested tool call: {fn_name} with args: {args} for Conv {sb_conversation_id}")
-                
+
                 try:
                     if fn_name == "get_store_info":
                         city_arg = args.get("city_name")
@@ -818,25 +780,17 @@ def process_new_message(
                         try:
                             output_data = json.loads(output_txt)
                             if output_data.get("status") == "success" and output_data.get("stores"):
-                                just_got_store_info = True
-                                if openai_history:
-                                    last_user_message = next(
-                                        (msg['content'] for msg in reversed(openai_history) if msg['role'] == 'user'),
-                                        None,
-                                    )
-                                    last_product_query = last_user_message
-                                logger.info(
-                                    f"STATE: `get_store_info` was successful. Flag set to True. Product query remembered: '{last_product_query}'"
-                                )
+                                warehouse_names_from_stores = [s.get("whsName") for s in output_data["stores"] if s.get("whsName")]
+                                logger.info(f"Extracted warehouse names for subsequent search: {warehouse_names_from_stores}")
                         except (json.JSONDecodeError, KeyError):
-                            just_got_store_info = False
-                    
+                            warehouse_names_from_stores = None
+
                     elif fn_name == "search_local_products":
                         query = args.get("query_text")
                         filter_stock_flag = args.get("filter_stock", True)
                         warehouse_names_arg = args.get("warehouse_names")
-                        min_price_arg = args.get("min_price") # Extract min_price
-                        max_price_arg = args.get("max_price") # Extract max_price
+                        min_price_arg = args.get("min_price")
+                        max_price_arg = args.get("max_price")
                         cheapest_intent = bool(query and user_is_asking_for_cheapest(query))
                         generic_intent = bool(query and _GENERIC_PRODUCT_PAT.fullmatch(query.strip()))
 
@@ -845,13 +799,10 @@ def process_new_message(
                             abort_tool_calls = True
                             break
 
-                        # If warehouse_names are not provided by LLM (e.g., first product search after getting city)
-                        # try to get them from conversation_location context.
                         if not warehouse_names_arg:
                             user_city = conversation_location.get_conversation_city(sb_conversation_id)
                             if user_city:
                                 logger.info(f"LLM did not provide warehouse_names for search. Fetching for city '{user_city}' from context for Conv {sb_conversation_id}.")
-                                # Call _tool_get_store_info internally to get whsNames for the city
                                 store_info_json_str = _tool_get_store_info(city_name=user_city)
                                 store_info_data = json.loads(store_info_json_str)
                                 if store_info_data.get("status") == "success" and store_info_data.get("stores"):
@@ -861,7 +812,7 @@ def process_new_message(
                                     logger.warning(f"Could not retrieve whsNames for city '{user_city}' to aid search. Proceeding without specific whsNames.")
                             else:
                                 logger.info(f"No city in context and no warehouse_names provided by LLM for search in Conv {sb_conversation_id}. Product search will be national or un-filtered by warehouse.")
-                        
+
                         if query:
                             search_res = product_service.search_local_products(
                                 query_text=query,
@@ -889,12 +840,12 @@ def process_new_message(
                             output_txt = _format_search_results_for_llm(ranked)
                         else:
                             output_txt = json.dumps({"status": "error", "message": "Error: 'query_text' es requerido para search_local_products."}, ensure_ascii=False)
-                    
+
                     elif fn_name == "get_live_product_details":
                         ident = args.get("product_identifier")
                         id_type = args.get("identifier_type")
                         if ident and id_type:
-                            details_result = None 
+                            details_result = None
                             if id_type == "sku":
                                 details_result = product_service.get_live_product_details_by_sku(item_code_query=ident)
                                 output_txt = _format_live_details_for_llm(details_result, identifier_type="SKU")
@@ -905,7 +856,6 @@ def process_new_message(
                                 output_txt = json.dumps({"status": "error", "message": f"Error: Tipo de identificador '{id_type}' no soportado. Use 'sku' o 'composite_id'."}, ensure_ascii=False)
                         else:
                             output_txt = json.dumps({"status": "error", "message": "Error: Faltan 'product_identifier' o 'identifier_type' para get_live_product_details."}, ensure_ascii=False)
-
 
                     elif fn_name == "get_color_variants":
                         item_code_arg = args.get("item_code")
@@ -919,14 +869,13 @@ def process_new_message(
                         else:
                             output_txt = json.dumps({"status": "error", "message": "Error: Falta 'item_code' para get_color_variants."}, ensure_ascii=False)
 
-
                     elif fn_name == "send_whatsapp_order_summary_template":
-                        cust_id_arg = args.get("customer_platform_user_id") or customer_user_id 
+                        cust_id_arg = args.get("customer_platform_user_id") or customer_user_id
                         conv_id_arg = args.get("conversation_id") or sb_conversation_id
                         template_vars_arg = _sanitize_template_variables(
                             args.get("template_variables")
                         )
-                        
+
                         if not cust_id_arg:
                             logger.error(f"Missing 'customer_platform_user_id' for {fn_name} in Conv {sb_conversation_id}, and fallback customer_user_id is also missing/invalid.")
                             output_txt = json.dumps({"status": "error", "message": "Error: Falta el ID del cliente para enviar la plantilla."}, ensure_ascii=False)
@@ -938,18 +887,18 @@ def process_new_message(
                             output_txt = json.dumps({"status": "error", "message": "Error: Faltan las variables para la plantilla."}, ensure_ascii=False)
                         else:
                             output_txt = _tool_send_whatsapp_order_summary_template(
-                                customer_platform_user_id=str(cust_id_arg), 
-                                conversation_id=str(conv_id_arg),       
+                                customer_platform_user_id=str(cust_id_arg),
+                                conversation_id=str(conv_id_arg),
                                 template_variables=template_vars_arg,
                             )
                     else:
                         output_txt = json.dumps({"status": "error", "message": f"Error: Herramienta desconocida '{fn_name}'."}, ensure_ascii=False)
                         logger.warning(f"LLM called unknown tool: {fn_name} in Conv {sb_conversation_id}")
 
-                except Exception as tool_exec_err: 
+                except Exception as tool_exec_err:
                     logger.exception(f"Tool execution error for {fn_name} (Conv {sb_conversation_id}): {tool_exec_err}")
                     output_txt = json.dumps({"status": "error", "message": f"Error interno al ejecutar la herramienta {fn_name}: {str(tool_exec_err)}"}, ensure_ascii=False)
-                
+
                 sanitized_output = _redact_store_details(output_txt)
                 tool_outputs_for_llm.append({
                     "tool_call_id": tool_call_id,
@@ -961,9 +910,51 @@ def process_new_message(
             if abort_tool_calls:
                 break
 
+            # Forced chaining: if the assistant only called get_store_info and we obtained warehouses
+            if len(tool_calls) == 1 and tool_calls[0].function.name == "get_store_info" and warehouse_names_from_stores:
+                logger.info("Forcing chained `search_local_products` call.")
+
+                product_intent_query = None
+                for msg in reversed(messages[:-1]):
+                    if msg.get("role") == "user" and not conversation_location.detect_city_from_text(msg.get("content")):
+                        product_intent_query = msg.get("content")
+                        break
+
+                if product_intent_query:
+                    logger.info(f"Found product intent for chained call: '{product_intent_query}'")
+                    search_res = product_service.search_local_products(
+                        query_text=product_intent_query,
+                        warehouse_names=warehouse_names_from_stores
+                    )
+                    search_output = _format_search_results_for_llm(search_res)
+
+                    messages.extend(tool_outputs_for_llm)
+
+                    fake_assistant_call = {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "forced_search_1",
+                            "type": "function",
+                            "function": {"name": "search_local_products", "arguments": json.dumps({"query_text": product_intent_query})}
+                        }]
+                    }
+                    forced_tool_result = {
+                        "tool_call_id": "forced_search_1",
+                        "role": "tool",
+                        "name": "search_local_products",
+                        "content": _redact_store_details(search_output)
+                    }
+                    messages.append(fake_assistant_call)
+                    messages.append(forced_tool_result)
+                    tool_call_count += 1
+                    continue
+                else:
+                    logger.warning("Chained call failed: could not determine product intent from history.")
+
             messages.extend(tool_outputs_for_llm)
             tool_call_count += 1
-            
+
             if tool_call_count > TOOL_CALL_RETRY_LIMIT and not final_assistant_response:
                 logger.warning(f"Tool call retry limit ({TOOL_CALL_RETRY_LIMIT}) strictly exceeded for Conv {sb_conversation_id}. Breaking loop.")
                 break
