@@ -16,6 +16,7 @@ from flask import current_app # Kept as it was in your original file
 
 # ── Local services ──────────────────────────────────────────────────────────────
 from . import product_service, support_board_service
+from .openai_service import user_is_asking_for_cheapest
 try:
     from . import recommender_service, ranking_llm_service
 except Exception:
@@ -167,6 +168,22 @@ tools_schema = [
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Opcional. Lista de almacenes para limitar la búsqueda según la ciudad.",
+                    },
+                    "min_price": {
+                        "type": "number",
+                        "description": "Opcional. Precio mínimo en USD para filtrar.",
+                    },
+                    "max_price": {
+                        "type": "number",
+                        "description": "Opcional. Precio máximo en USD para filtrar.",
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "description": "Opcional. 'price_asc' o 'price_desc' para ordenar por precio.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Opcional. Número máximo de resultados a retornar.",
                     },
                 },
                 "required": ["query_text"],
@@ -443,11 +460,13 @@ def process_new_message_gemini_via_openai_lib( # Your original function name
                         if not warehouse_names_arg:
                             warehouse_names_arg = conversation_location.get_city_warehouses(sb_conversation_id)
                         if query:
+                            cheapest_intent = bool(query and user_is_asking_for_cheapest(query))
                             search_results_list = product_service.search_local_products(
                                 query_text=query,
                                 limit=getattr(Config, "PRODUCT_SEARCH_LIMIT", 10),
                                 filter_stock=filter_stock_flag,
                                 warehouse_names=warehouse_names_arg,
+                                sort_by="price_asc" if cheapest_intent else None,
                             )
                             intent_data = {
                                 "raw_query": query,
