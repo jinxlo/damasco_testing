@@ -21,6 +21,13 @@ try:  # Optional import for testing environments
 except Exception:  # pragma: no cover - fallback for stripped test modules
     def canonicalize_whs_name(name):
         return name
+
+# Re-export helper for backward compatibility in tests
+try:
+    user_is_asking_for_cheapest = product_utils.user_is_asking_for_cheapest
+except AttributeError:  # pragma: no cover - stubbed in tests
+    def user_is_asking_for_cheapest(message: str) -> bool:
+        return False
 import re
 
 
