@@ -52,6 +52,9 @@ sys.modules.setdefault('namwoo_app.services.product_service', types.ModuleType('
 sys.modules.setdefault('namwoo_app.services.support_board_service', types.ModuleType('sb'))
 sys.modules.setdefault('namwoo_app.utils.embedding_utils', types.ModuleType('eu'))
 sys.modules.setdefault('namwoo_app.utils.conversation_location', types.ModuleType('cl'))
+pu_mod = types.ModuleType('pu')
+pu_mod.user_is_asking_for_cheapest = lambda msg: any(k in msg.lower() for k in ['barato','economico','menor precio','menos costoso','mas bajo']) if msg else False
+sys.modules.setdefault('namwoo_app.utils.product_utils', pu_mod)
 sys.modules.setdefault('namwoo_app.services.product_recommender', types.ModuleType('pr'))
 
 config_pkg = types.ModuleType('namwoo_app.config')

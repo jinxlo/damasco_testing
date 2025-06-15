@@ -1,6 +1,10 @@
 from typing import Dict, List, Optional
 import os
 import json
+import logging
+
+from . import db_utils
+from ..models.conversation_city import ConversationCity
 
 _STORE_LOCATIONS_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
@@ -23,16 +27,44 @@ for store in _STORES_DATA:
 
 VALID_CITIES: List[str] = sorted(CITY_TO_WAREHOUSES.keys())
 
-_conversation_city_map: Dict[str, str] = {}
+
+logger = logging.getLogger(__name__)
 
 
 def set_conversation_city(conversation_id: str, city: str) -> None:
-    if conversation_id and city:
-        _conversation_city_map[conversation_id] = city
+    """Persist the detected city for a conversation."""
+    if not (conversation_id and city):
+        return
+    try:
+        with db_utils.get_db_session() as session:
+            if not session:
+                return
+            record = session.query(ConversationCity).filter_by(
+                conversation_id=conversation_id
+            ).first()
+            if record:
+                record.city = city
+            else:
+                session.add(ConversationCity(conversation_id=conversation_id, city=city))
+    except Exception as e:
+        logger.exception(f"Error saving city for conversation {conversation_id}: {e}")
 
 
 def get_conversation_city(conversation_id: str) -> Optional[str]:
-    return _conversation_city_map.get(conversation_id)
+    """Retrieve the stored city for a conversation."""
+    if not conversation_id:
+        return None
+    try:
+        with db_utils.get_db_session() as session:
+            if not session:
+                return None
+            record = session.query(ConversationCity).filter_by(
+                conversation_id=conversation_id
+            ).first()
+            return record.city if record else None
+    except Exception as e:
+        logger.exception(f"Error fetching city for conversation {conversation_id}: {e}")
+        return None
 
 
 def get_warehouses_for_city(city: str) -> List[str]:
@@ -42,7 +74,7 @@ def get_warehouses_for_city(city: str) -> List[str]:
 
 
 def get_city_warehouses(conversation_id: str) -> List[str]:
-    city = _conversation_city_map.get(conversation_id)
+    city = get_conversation_city(conversation_id)
     if not city:
         return []
     return get_warehouses_for_city(city)

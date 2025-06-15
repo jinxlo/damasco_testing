@@ -15,7 +15,7 @@ from . import product_recommender
 from ..config import Config # For SYSTEM_PROMPT, MAX_HISTORY_MESSAGES etc.
 from ..utils import embedding_utils
 from ..utils import conversation_location
-from ..utils import product_utils # Import our new formatting utils
+from ..utils import product_utils  # Import formatting utils and cheap check
 try:  # Optional import for testing environments
     from ..utils.whs_utils import canonicalize_whs_name
 except Exception:  # pragma: no cover - fallback for stripped test modules
@@ -25,6 +25,11 @@ import re
 
 
 logger = logging.getLogger(__name__)
+
+
+def user_is_asking_for_cheapest(message: str) -> bool:
+    """Backward compatible wrapper for product_utils check."""
+    return product_utils.user_is_asking_for_cheapest(message)
 
 # Path to the store locations JSON file
 _STORE_LOCATIONS_FILE_PATH = os.path.join(

@@ -1,6 +1,6 @@
 # namwoo_app/utils/product_utils.py
 import re
-from typing import Optional, Any, List, Dict
+from typing import Optional, Any, List, Dict, Tuple
 from collections import defaultdict
 import locale
 from decimal import Decimal
@@ -91,6 +91,12 @@ def _extract_color_from_name(item_name: str) -> Optional[str]:
     return match.group(1).capitalize() if match else None
 
 
+def extract_color_from_name(item_name: str) -> Tuple[Optional[str], str]:
+    """Return detected color and base model name for compatibility."""
+    base = _get_base_model_name(item_name)
+    return _extract_color_from_name(item_name), base
+
+
 def group_products_by_model(products: List[Dict]) -> List[Dict]:
     """Groups product variants by a robustly identified base model name."""
     if not products:
@@ -103,7 +109,7 @@ def group_products_by_model(products: List[Dict]) -> List[Dict]:
     })
 
     for product in products:
-        item_name = product.get("item_name", "")
+        item_name = product.get("item_name") or product.get("itemName", "")
         base_model_name = _get_base_model_name(item_name)
 
         if not grouped[base_model_name]['representative_product']:
@@ -121,7 +127,10 @@ def group_products_by_model(products: List[Dict]) -> List[Dict]:
     for base_model, data in grouped.items():
         final_product = dict(data['representative_product'])
         final_product['base_model_name'] = base_model
-        final_product['available_colors'] = sorted(list(data['colors']))
+        final_product['model'] = base_model
+        colors_sorted = sorted(list(data['colors']))
+        final_product['available_colors'] = colors_sorted
+        final_product['colors'] = colors_sorted
         final_product['available_in_stores'] = sorted(list(data['available_in_stores']))
         result.append(final_product)
         
@@ -134,7 +143,7 @@ def _get_key_specs(product: Dict, user_query: Optional[str] = None) -> str:
     field if it exists, otherwise falls back to the LLM summary.
     """
     # Prioritize the structured `especificacion` field, accounting for the typo.
-    spec_str = product.get("especificacion") or product.get("specifitacion")
+    spec_str = product.get("especificacion") or product.get("specifitacion") or product.get("description")
     
     if spec_str:
         # Clean up the spec string: replace newlines with a standard delimiter.
@@ -149,20 +158,26 @@ def _get_key_specs(product: Dict, user_query: Optional[str] = None) -> str:
 
 def format_product_response(grouped_product: Dict, user_query: Optional[str] = None) -> str:
     """Formats a single grouped product into the desired 'Product Card' string."""
-    model = grouped_product.get("base_model_name") or grouped_product.get("item_name", "Producto")
+    model = grouped_product.get("base_model_name") or grouped_product.get("model") or grouped_product.get("item_name", "Producto")
     price_usd = grouped_product.get("price")
-    price_bs = grouped_product.get("price_bolivar")
+    price_bs = grouped_product.get("price_bolivar") or grouped_product.get("priceBolivar")
     
     price_usd_str = f"${price_usd:,.2f}" if isinstance(price_usd, (int, float, Decimal)) else "Precio no disponible"
     # Format Bolivares with space as thousand separator and comma as decimal
-    price_bs_str = f"Bs. {locale.format_string('%.2f', price_bs, grouping=True)}".replace(",", "X").replace(".", ",").replace("X", ".") if isinstance(price_bs, (int, float, Decimal)) else ""
+    if isinstance(price_bs, (int, float, Decimal)):
+        price_bs_str = f"Bs. {price_bs:,.2f}"
+    else:
+        price_bs_str = ""
 
-    colors = grouped_product.get("available_colors", [])
+    colors = grouped_product.get("available_colors") or grouped_product.get("colors", [])
     colors_str = ", ".join(colors) if colors else "No especificado"
 
     description = _get_key_specs(grouped_product, user_query)
 
-    stores = grouped_product.get("available_in_stores", [])
+    stores = grouped_product.get("available_in_stores")
+    if not stores:
+        single_store = grouped_product.get("store")
+        stores = [single_store] if single_store else []
     stores_str = f"Disponible en {', '.join(stores)}." if stores else ""
     
     card_lines = [
@@ -190,6 +205,11 @@ def format_multiple_products_response(products: List[Dict], user_query: Optional
     response += "\n\n¿Quieres que verifiquemos uno de estos para ti o deseas ver más opciones? 😊"
     
     return response
+
+
+def get_available_brands(products: List[Dict]) -> List[str]:
+    """Return sorted list of unique brand names from product dicts."""
+    return sorted({p.get("brand") for p in products if p.get("brand")})
 
 
 def format_brand_list(brands: list) -> str:

@@ -63,6 +63,12 @@ CREATE TABLE IF NOT EXISTS conversation_pauses (
     paused_until TIMESTAMP WITH TIME ZONE NOT NULL
 );
 
+-- Persistent mapping of conversation -> detected city
+CREATE TABLE IF NOT EXISTS conversation_cities (
+    conversation_id VARCHAR(255) PRIMARY KEY,
+    city VARCHAR(128) NOT NULL
+);
+
 -- 6. Optional Comments
 COMMENT ON TABLE products IS 'Stores specific product stock entries at each warehouse, synchronized from Damasco API, including vector embeddings for semantic search of the product description.';
 COMMENT ON COLUMN products.id IS 'Application-generated composite PK: item_code + sanitized warehouse_name.';
