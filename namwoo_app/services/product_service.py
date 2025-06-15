@@ -2,23 +2,23 @@
 
 import logging
 import re
-from datetime import datetime  # Keep this if you use it, e.g., for updated_at
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from decimal import InvalidOperation as InvalidDecimalOperation
-from typing import Any, Dict, List, Optional, Tuple, Union  # Added Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-from sqlalchemy import func, literal_column, distinct
+from sqlalchemy import func, literal_column, distinct, or_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from ..config import Config  # For Config.OPENAI_EMBEDDING_MODEL
-from ..models.product import Product  # Product model used for ORM and Product.to_dict()
-from ..utils import db_utils, embedding_utils, product_utils  # product_utils for variant helpers
+from ..config import Config
+from ..models.product import Product
+from ..utils import db_utils, embedding_utils, product_utils
 from ..utils.whs_utils import canonicalize_whs
 
-logger = logging.getLogger(__name__)  # Standard logger for this module
+logger = logging.getLogger(__name__)
 
 # --- Semantic Helpers ---
 _ACCESSORY_PAT = re.compile(
@@ -57,6 +57,7 @@ def search_local_products(
     max_price: Optional[Union[float, int, str]] = None,
     sort_by: Optional[str] = None,
     exclude_accessories: bool = False,
+    required_specs: Optional[List[str]] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     if not query_text or not isinstance(query_text, str):
         logger.warning("Search query is empty or invalid.")
@@ -71,6 +72,8 @@ def search_local_products(
     if warehouse_names:
         warehouse_names = [canonicalize_whs(w) for w in warehouse_names if w]
         log_message_parts.append(f"warehouses={warehouse_names}")
+    if required_specs:
+        log_message_parts.append(f"required_specs={required_specs}")
     if min_price is not None:
         log_message_parts.append(f"min_price={min_price}")
     if max_price is not None:
@@ -82,7 +85,7 @@ def search_local_products(
 
     logger.info(", ".join(log_message_parts))
     logger.debug(
-        "search_local_products args - query_text=%s, limit=%s, filter_stock=%s, min_score=%s, warehouses=%s, min_price=%s, max_price=%s, sort_by=%s, exclude_accessories=%s",
+        "search_local_products args - query_text=%s, limit=%s, filter_stock=%s, min_score=%s, warehouses=%s, min_price=%s, max_price=%s, sort_by=%s, exclude_accessories=%s, required_specs=%s",
         query_text,
         limit,
         filter_stock,
@@ -92,6 +95,7 @@ def search_local_products(
         max_price,
         sort_by,
         exclude_accessories,
+        required_specs,
     )
 
     embedding_model = (
@@ -124,11 +128,23 @@ def search_local_products(
             if warehouse_names:
                 q = q.filter(Product.warehouse_name_canonical.in_(warehouse_names))
                 applied_filters.append(f"warehouses={warehouse_names}")
+            
+            if required_specs:
+                for spec in required_specs:
+                    normalized_spec = spec.lower().replace(" ", "")
+                    like_pattern = f"%{normalized_spec}%"
+                    
+                    q = q.filter(
+                        or_(
+                            func.lower(func.replace(Product.item_name, ' ', '')).like(like_pattern),
+                            func.lower(func.replace(Product.description, ' ', '')).like(like_pattern),
+                            func.lower(func.replace(Product.especificacion, ' ', '')).like(like_pattern),
+                            func.lower(func.replace(Product.searchable_text_content, ' ', '')).like(like_pattern)
+                        )
+                    )
+                    applied_filters.append(f"spec:{spec} (normalized: {normalized_spec})")
+                logger.info(f"Applied robust hard filters for specs: {required_specs}")
 
-            # Removed: q = q.filter(Product.item_group_name == "DAMASCO TECNO") # Confirmed REMOVED
-
-            # Apply price filters if provided and valid
-            min_price_decimal = None
             if min_price is not None:
                 try:
                     min_price_decimal = Decimal(str(min_price)).quantize(
@@ -136,13 +152,11 @@ def search_local_products(
                     )
                     q = q.filter(Product.price >= min_price_decimal)
                     applied_filters.append(f"price>={min_price_decimal}")
-                    logger.info(f"Applying min_price filter: >= {min_price_decimal}")
                 except InvalidDecimalOperation:
                     logger.warning(
                         f"Invalid min_price value '{min_price}' provided. Ignoring min_price filter."
                     )
 
-            max_price_decimal = None
             if max_price is not None:
                 try:
                     max_price_decimal = Decimal(str(max_price)).quantize(
@@ -150,13 +164,11 @@ def search_local_products(
                     )
                     q = q.filter(Product.price <= max_price_decimal)
                     applied_filters.append(f"price<={max_price_decimal}")
-                    logger.info(f"Applying max_price filter: <= {max_price_decimal}")
                 except InvalidDecimalOperation:
                     logger.warning(
                         f"Invalid max_price value '{max_price}' provided. Ignoring max_price filter."
                     )
 
-            # Diagnostic: log similarity scores before applying min_score
             diagnostic_q = q.order_by(
                 Product.embedding.cosine_distance(query_emb)
             ).limit(limit)
@@ -179,22 +191,7 @@ def search_local_products(
                 else "[VECTOR SEARCH] Top similarity score: No results"
             )
 
-            # Reconstruct query with min_score filter for actual results
-            q_final = session.query(
-                Product,
-                (1 - Product.embedding.cosine_distance(query_emb)).label("similarity"),
-            )
-            if filter_stock:
-                q_final = q_final.filter(Product.stock > 0)
-            if warehouse_names:
-                q_final = q_final.filter(
-                    Product.warehouse_name_canonical.in_(warehouse_names)
-                )
-            if min_price_decimal is not None:
-                q_final = q_final.filter(Product.price >= min_price_decimal)
-            if max_price_decimal is not None:
-                q_final = q_final.filter(Product.price <= max_price_decimal)
-            q_final = q_final.filter(
+            q_final = q.filter(
                 (1 - Product.embedding.cosine_distance(query_emb)) >= min_score
             )
             if sort_by == "price_asc":
@@ -212,7 +209,7 @@ def search_local_products(
             final_rows = rows
             if not final_rows and diagnostic_rows:
                 logger.warning(
-                    f"Top similarity {diagnostic_rows[0][1]:.4f} was below threshold {min_score}. Returning fallback result."
+                    f"Top similarity {diagnostic_rows[0][1]:.4f} was below threshold {min_score} or no results passed hard spec filters. Returning fallback result."
                 )
                 final_rows = diagnostic_rows[:1]
             results: List[Dict[str, Any]] = []
@@ -248,6 +245,7 @@ def search_local_products(
                     max_price=max_price,
                     sort_by=sort_by,
                     exclude_accessories=exclude_accessories,
+                    required_specs=required_specs,
                 )
 
             if not results:
@@ -257,10 +255,6 @@ def search_local_products(
                 return []
 
             logger.info(f"[VECTOR SEARCH] Results returned: {len(results)}")
-
-            logger.info(
-                "Vector search returned %d product location entries.", len(results)
-            )
 
             return results
         except SQLAlchemyError as db_exc:
@@ -289,8 +283,8 @@ def get_product_by_id_from_db(
 
 def add_or_update_product_in_db(
     session: Session,
-    damasco_product_data_camel: Dict[str, Any],  # Main data bundle (camelCase keys)
-    embedding_vector: Optional[Any],  # List[float], np.ndarray, or None
+    damasco_product_data_camel: Dict[str, Any],
+    embedding_vector: Optional[Any],
     text_used_for_embedding: Optional[str],
     llm_summarized_description_to_store: Optional[str],
 ) -> Tuple[bool, str]:
@@ -387,6 +381,11 @@ def add_or_update_product_in_db(
     norm_raw_html = _normalize_string(raw_html_description_to_store)
     norm_llm_summary = _normalize_string(llm_summarized_description_to_store)
     norm_searchable_text = _normalize_string(text_used_for_embedding)
+    
+    especificacion_value = (
+        damasco_product_data_camel.get("specifitacion")
+        or damasco_product_data_camel.get("especificacion")
+    )
 
     new_values_map = {
         "item_code": item_code,
@@ -402,9 +401,7 @@ def add_or_update_product_in_db(
         "item_group_name": _normalize_string(
             damasco_product_data_camel.get("itemGroupName")
         ),
-        "especificacion": _normalize_string(
-            damasco_product_data_camel.get("especificacion")
-        ),
+        "especificacion": _normalize_string(especificacion_value),
         "warehouse_name": whs_name_raw,
         "branch_name": _normalize_string(damasco_product_data_camel.get("branchName")),
         "price": normalized_price_for_db,
@@ -550,7 +547,6 @@ def get_live_product_details_by_id(composite_id: str) -> Optional[Dict[str, Any]
             return None
 
 def get_color_variants_for_sku(item_code_query: str) -> Optional[List[str]]:
-    """Return other item_codes with the same base code but different color suffixes."""
     if not item_code_query:
         logger.error("get_color_variants_for_sku: Missing item_code_query argument.")
         return None
@@ -587,10 +583,87 @@ def get_color_variants_for_sku(item_code_query: str) -> Optional[List[str]]:
 
 
 def get_available_brands(category: Optional[str] = None) -> List[str]:
-    """Returns a list of unique product brands, optionally filtered by category."""
     with db_utils.get_db_session() as session:
-        query = session.query(distinct(Product.brand))
-        if category:
-            query = query.filter(Product.category.ilike(f"%{category}%"))
-        results = query.order_by(Product.brand).all()
-        return [row[0] for row in results if row[0]]
+        if not session:
+            logger.error("DB session unavailable for get_available_brands.")
+            return []
+        try:
+            query = session.query(distinct(Product.brand)).filter(Product.brand.isnot(None))
+            if category:
+                like_pattern = f"%{category}%"
+                query = query.filter(
+                    or_(
+                        Product.category.ilike(like_pattern),
+                        Product.sub_category.ilike(like_pattern)
+                    )
+                )
+            results = query.order_by(Product.brand).all()
+            brands = [row[0] for row in results if row[0]]
+            logger.info(f"Found {len(brands)} brands for category '{category}': {brands}")
+            return brands
+        except SQLAlchemyError as e:
+            logger.exception(f"Database error in get_available_brands for category '{category}': {e}")
+            return []
+
+# --- NEW FUNCTIONS FOR CONVERSATIONAL FLOW ---
+def find_relevant_accessory(main_product_category: str, warehouse_names: List[str]) -> Optional[Dict[str, Any]]:
+    """
+    Finds a relevant, in-stock accessory for a given product.
+    Example: For a 'CELULAR', it will look for 'cargador' or 'protector'.
+    """
+    if not main_product_category or not warehouse_names:
+        return None
+
+    accessory_keywords = {
+        'CELULAR': ['cargador', 'audifono', 'forro', 'protector de pantalla', 'vidrio templado'],
+        'TECNOLOGÍA': ['cargador', 'audifono', 'forro', 'protector', 'cable'], # Broader category
+        'TELEVISOR': ['base', 'control', 'cable hdmi', 'protector de voltaje'],
+        'LAVADORA': ['protector de voltaje'],
+        'NEVERA': ['protector de voltaje'],
+        'AIRE ACONDICIONADO': ['protector de voltaje', 'base para split', 'control']
+    }
+    
+    # Use the specific category, fallback to a general one, then a default
+    main_cat_upper = main_product_category.upper()
+    keywords_to_search = accessory_keywords.get(main_cat_upper, ['protector de voltaje'])
+
+    with db_utils.get_db_session() as session:
+        if not session: return None
+        try:
+            canonical_whs_names = [canonicalize_whs(w) for w in warehouse_names if w]
+            
+            accessory = session.query(Product).filter(
+                Product.stock > 0,
+                Product.warehouse_name_canonical.in_(canonical_whs_names),
+                or_(*[Product.item_name.ilike(f'%{key}%') for key in keywords_to_search]),
+                or_(Product.category.ilike('%ACCESORIO%'), Product.sub_category.ilike('%ACCESORIO%'))
+            ).order_by(Product.price.asc()).first()
+
+            if accessory:
+                logger.info(f"Found relevant accessory '{accessory.item_name}' for category '{main_product_category}'.")
+                return accessory.to_dict()
+            else:
+                logger.info(f"No relevant in-stock accessory found for category '{main_product_category}' in given warehouses.")
+                return None
+        except Exception as e:
+            logger.exception(f"Error finding relevant accessory: {e}")
+            return None
+
+def get_product_availability_by_sku(item_code: str) -> Optional[List[str]]:
+    """Returns a list of unique branch names where the product is in stock."""
+    if not item_code: return None
+    with db_utils.get_db_session() as session:
+        if not session: return None
+        try:
+            results = session.query(distinct(Product.branch_name)).filter(
+                Product.item_code.ilike(item_code),
+                Product.stock > 0,
+                Product.branch_name.isnot(None)
+            ).order_by(Product.branch_name).all()
+            
+            locations = [row[0] for row in results if row[0]]
+            logger.info(f"Found {len(locations)} in-stock locations for SKU '{item_code}': {locations}")
+            return locations
+        except Exception as e:
+            logger.exception(f"Error getting availability for SKU '{item_code}': {e}")
+            return None
