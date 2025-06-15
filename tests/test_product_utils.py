@@ -7,6 +7,11 @@ spec = importlib.util.spec_from_file_location("product_utils", UTILS_PATH)
 product_utils = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(product_utils)
 generate_product_location_id = product_utils.generate_product_location_id
+extract_color_from_name = product_utils.extract_color_from_name
+group_products_by_model = product_utils.group_products_by_model
+get_available_brands = product_utils.get_available_brands
+format_product_response = product_utils.format_product_response
+format_brand_list = product_utils.format_brand_list
 
 
 def test_generate_product_location_id_basic():
@@ -29,3 +34,45 @@ def test_generate_product_location_id_truncates():
     result = generate_product_location_id(item_code, whs_name)
     expected = (f"{item_code}_{whs_name}")[:512]
     assert result == expected
+
+
+def test_extract_color_from_name():
+    color, base = extract_color_from_name("TECNO CAMON 30 GRIS")
+    assert color == "Gris"
+    assert base == "TECNO CAMON 30"
+
+
+def test_group_products_by_model_and_brands():
+    items = [
+        {"itemName": "INFINIX HOT 50 NEGRO", "brand": "INFINIX", "price": 240},
+        {"itemName": "INFINIX HOT 50 VERDE", "brand": "INFINIX", "price": 240},
+        {"itemName": "TECNO SPARK 20 AZUL", "brand": "TECNO", "price": 200},
+    ]
+    grouped = group_products_by_model(items)
+    assert len(grouped) == 2
+    hot50 = next(g for g in grouped if g["model"] == "INFINIX HOT 50")
+    assert sorted(hot50["colors"]) == ["Negro", "Verde"]
+    brands = get_available_brands(items)
+    assert set(brands) == {"INFINIX", "TECNO"}
+
+
+def test_format_product_response_and_brand_list():
+    grouped_product = {
+        "model": "TECNO CAMON 30",
+        "price": 240,
+        "priceBolivar": 24082,
+        "colors": ["Negro", "Gris"],
+        "description": "Pantalla FHD+",
+        "store": "Caracas (CCCT)",
+    }
+    msg = format_product_response(grouped_product)
+    assert "TECNO CAMON 30" in msg
+    assert "$240.00" in msg
+    assert "Bs. 24,082.00" in msg
+    assert "Negro, Gris" in msg
+    assert "Pantalla FHD+" in msg
+    assert "Caracas (CCCT)" in msg
+
+    brand_message = format_brand_list(["XIAOMI", "TECNO", "SAMSUNG"])
+    assert brand_message.startswith("📱 Estas son las marcas")
+    assert "🔹 SAMSUNG" in brand_message
