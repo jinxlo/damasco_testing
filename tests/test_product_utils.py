@@ -76,3 +76,20 @@ def test_format_product_response_and_brand_list():
     brand_message = format_brand_list(["XIAOMI", "TECNO", "SAMSUNG"])
     assert brand_message.startswith("📱 Estas son las marcas")
     assert "🔹 SAMSUNG" in brand_message
+
+
+def test_get_key_specs_truncates_especificacion():
+    long_spec = "a" * 250 + "\nsecond line should be ignored"
+    product = {"especificacion": long_spec}
+    result = product_utils._get_key_specs(product)
+    assert len(result) == 200
+    assert "second line" not in result
+
+
+def test_get_key_specs_truncates_llm_summary():
+    long_summary = "Esta es una oracion muy larga " + ("b" * 240) + ". Otra oracion que no debe aparecer."
+    product = {"llm_summarized_description": long_summary}
+    result = product_utils._get_key_specs(product)
+    assert len(result) == 200
+    assert "Otra oracion" not in result
+

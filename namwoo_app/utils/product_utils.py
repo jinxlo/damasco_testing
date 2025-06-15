@@ -91,6 +91,21 @@ def _extract_color_from_name(item_name: str) -> Optional[str]:
     return match.group(1).capitalize() if match else None
 
 
+def extract_color_from_name(item_name: str) -> tuple[Optional[str], str]:
+    """Return the extracted color and base model name."""
+    color = _extract_color_from_name(item_name)
+    base = _get_base_model_name(item_name)
+    return color, base
+
+
+def get_available_brands(products: List[Dict]) -> List[str]:
+    """Return a list of unique brand names from the provided product dicts."""
+    if not products:
+        return []
+    seen = {str(p.get("brand", "")).strip() for p in products if p.get("brand")}
+    return sorted(seen)
+
+
 def group_products_by_model(products: List[Dict]) -> List[Dict]:
     """Groups product variants by a robustly identified base model name."""
     if not products:
@@ -103,7 +118,7 @@ def group_products_by_model(products: List[Dict]) -> List[Dict]:
     })
 
     for product in products:
-        item_name = product.get("item_name", "")
+        item_name = product.get("item_name") or product.get("itemName", "")
         base_model_name = _get_base_model_name(item_name)
 
         if not grouped[base_model_name]['representative_product']:
@@ -121,7 +136,10 @@ def group_products_by_model(products: List[Dict]) -> List[Dict]:
     for base_model, data in grouped.items():
         final_product = dict(data['representative_product'])
         final_product['base_model_name'] = base_model
-        final_product['available_colors'] = sorted(list(data['colors']))
+        final_product['model'] = base_model
+        colors_sorted = sorted(list(data['colors']))
+        final_product['available_colors'] = colors_sorted
+        final_product['colors'] = colors_sorted
         final_product['available_in_stores'] = sorted(list(data['available_in_stores']))
         result.append(final_product)
         
@@ -129,40 +147,53 @@ def group_products_by_model(products: List[Dict]) -> List[Dict]:
 
 
 def _get_key_specs(product: Dict, user_query: Optional[str] = None) -> str:
-    """
-    Gets a concise, user-friendly spec list. Prioritizes the 'especificacion'
-    field if it exists, otherwise falls back to the LLM summary.
-    """
-    # Prioritize the structured `especificacion` field, accounting for the typo.
-    spec_str = product.get("especificacion") or product.get("specifitacion")
-    
-    if spec_str:
-        # Clean up the spec string: replace newlines with a standard delimiter.
-        specs = re.sub(r'[\r\n]+', ', ', spec_str).strip()
-        # Normalize whitespace
-        return ' '.join(specs.split())
+    """Return a short description of key specs for a product."""
 
-    # Fallback to LLM summary if no structured specs
-    summary = product.get("llm_summarized_description", "Descripción no disponible.").strip()
-    return summary
+    MAX_LEN = 200
+
+    # Prioritize the structured `especificacion` field (and common typo)
+    spec_str = product.get("especificacion") or product.get("specifitacion")
+    if spec_str:
+        first_line = spec_str.strip().splitlines()[0]
+        clean = " ".join(first_line.split())
+        return clean[:MAX_LEN].rstrip()
+
+    # Fallback to the LLM summary
+    summary = (
+        product.get("llm_summarized_description")
+        or product.get("description")
+        or "Descripción no disponible."
+    ).strip()
+    if not summary:
+        return ""
+    first_sentence = summary.split(".")[0].strip()
+    if first_sentence:
+        first_sentence += "." if summary.startswith(first_sentence) and summary[len(first_sentence):].lstrip().startswith(".") else ""
+    clean_sum = " ".join(first_sentence.split())
+    return clean_sum[:MAX_LEN].rstrip()
 
 
 def format_product_response(grouped_product: Dict, user_query: Optional[str] = None) -> str:
     """Formats a single grouped product into the desired 'Product Card' string."""
-    model = grouped_product.get("base_model_name") or grouped_product.get("item_name", "Producto")
+    model = (
+        grouped_product.get("base_model_name")
+        or grouped_product.get("model")
+        or grouped_product.get("item_name", "Producto")
+    )
     price_usd = grouped_product.get("price")
-    price_bs = grouped_product.get("price_bolivar")
+    price_bs = grouped_product.get("price_bolivar") or grouped_product.get("priceBolivar")
     
     price_usd_str = f"${price_usd:,.2f}" if isinstance(price_usd, (int, float, Decimal)) else "Precio no disponible"
     # Format Bolivares with space as thousand separator and comma as decimal
-    price_bs_str = f"Bs. {locale.format_string('%.2f', price_bs, grouping=True)}".replace(",", "X").replace(".", ",").replace("X", ".") if isinstance(price_bs, (int, float, Decimal)) else ""
+    price_bs_str = f"Bs. {price_bs:,.2f}" if isinstance(price_bs, (int, float, Decimal)) else ""
 
-    colors = grouped_product.get("available_colors", [])
+    colors = grouped_product.get("available_colors") or grouped_product.get("colors", [])
     colors_str = ", ".join(colors) if colors else "No especificado"
 
     description = _get_key_specs(grouped_product, user_query)
 
-    stores = grouped_product.get("available_in_stores", [])
+    store_value = grouped_product.get("available_in_stores") or grouped_product.get("store")
+    stores = store_value if isinstance(store_value, list) else ([store_value] if store_value else [])
     stores_str = f"Disponible en {', '.join(stores)}." if stores else ""
     
     card_lines = [
