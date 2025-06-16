@@ -23,14 +23,12 @@ except Exception:  # pragma: no cover - fallback for stripped test modules
         return name
 
 # Re-export helper for backward compatibility in tests
-try:
-    user_is_asking_for_cheapest = product_utils.user_is_asking_for_cheapest
-    user_is_asking_for_list = product_utils.user_is_asking_for_list
-except AttributeError:  # pragma: no cover - stubbed in tests
-    def user_is_asking_for_cheapest(message: str) -> bool:
-        return False
-    def user_is_asking_for_list(message: str) -> bool:
-        return False
+user_is_asking_for_cheapest = getattr(
+    product_utils, "user_is_asking_for_cheapest", lambda message: False
+)
+user_is_asking_for_list = getattr(
+    product_utils, "user_is_asking_for_list", lambda message: False
+)
 import re
 
 
@@ -817,7 +815,7 @@ def process_new_message(
 
                         if is_list_request:
                             logger.info(f"List format requested based on user message: '{triggering_user_message_content}'")
-                            formatted_response = product_utils.format_product_list_response(candidate_products)
+                            formatted_response = product_utils.format_model_list_with_colors(candidate_products)
                         else:
                             logger.info(f"Recommendation format requested based on user message: '{triggering_user_message_content}'")
                             ranked_grouped_products = product_recommender.rank_products(query_text, candidate_products)

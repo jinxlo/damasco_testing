@@ -148,26 +148,32 @@ def search_local_products(
                     all_specs_met = True
                     for spec in required_specs:
                         spec_lower = spec.lower()
-                        # Extract numeric parts from the spec, e.g., '8' from '8gb'
                         spec_nums = re.findall(r'\d+', spec_lower)
-                        
-                        # If the spec is purely textual (e.g., 'amoled')
+
+                        # Purely textual requirement (e.g., 'amoled')
                         if not spec_nums:
                             if spec_lower not in authoritative_text:
                                 all_specs_met = False
                                 break
                             continue
 
-                        # If the spec has a numeric component (e.g., '8gb')
+                        # Numeric requirement; treat memory specs with additional context
                         num_found_in_text = False
                         for num in spec_nums:
-                            # Regex: find the number surrounded by non-alphanumeric chars or start/end of string.
-                            # This correctly finds '8' in '256+8', '(8gb)' or 'RAM: 8gb' but not in '128'.
-                            pattern = r'(?:^|\D)' + re.escape(num) + r'(?:\D|$)'
-                            if re.search(pattern, authoritative_text):
-                                num_found_in_text = True
-                                break
-                        
+                            if any(token in spec_lower for token in ["gb", "ram", "memoria"]):
+                                mem_pattern = re.compile(
+                                    rf"(?:\b{num}\s*(?:gb|g|g\s*ram)?(?:\s*(?:ram|memoria))?|\b(?:ram|memoria)\s*:?\s*{num}(?:\s*gb)?|\b\d+\+{num}\b)",
+                                    re.I,
+                                )
+                                if mem_pattern.search(authoritative_text):
+                                    num_found_in_text = True
+                                    break
+                            else:
+                                general_pattern = re.compile(rf"(?<!\d){num}(?!\d)")
+                                if general_pattern.search(authoritative_text):
+                                    num_found_in_text = True
+                                    break
+
                         if not num_found_in_text:
                             all_specs_met = False
                             break
