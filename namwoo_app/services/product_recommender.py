@@ -9,8 +9,14 @@ from typing import List, Dict, Any, Optional
 from openai import OpenAI
 
 from ..config import Config
-from . import product_service
-from ..utils import conversation_location
+try:  # Allow tests to stub this before import
+    from . import product_service
+except Exception:  # pragma: no cover - allow missing deps in tests
+    product_service = None
+try:
+    from ..utils import conversation_location
+except Exception:  # pragma: no cover - allow missing deps in tests
+    conversation_location = None
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +54,25 @@ def rank_products(user_intent: str, candidates: List[Dict[str, Any]], top_n: int
     """
     if not candidates:
         return []
+
+    # If configured for LLM ranking and a client is available, try that first
+    if getattr(Config, "RECOMMENDER_MODE", "llm") == "llm" and _llm_client is not None:
+        try:
+            cand_payload = json.dumps([_prepare_candidate(c) for c in candidates], ensure_ascii=False)
+            user_prompt = f"{cand_payload}\nUsuario: {user_intent}"
+            response = _llm_client.chat.completions.create(
+                model=getattr(Config, "RECOMMENDER_LLM_MODEL", "gpt-4o-mini"),
+                messages=[{"role": "system", "content": _RANK_PROMPT}, {"role": "user", "content": user_prompt}],
+                temperature=0.0,
+                max_tokens=100,
+            )
+            ordered = json.loads(response.choices[0].message.content).get("ordered_skus", [])
+            ranked = [next((c for c in candidates if c.get("item_code") == sku), None) for sku in ordered]
+            ranked = [r for r in ranked if r]
+            if ranked:
+                return ranked[:top_n]
+        except Exception as exc:  # pragma: no cover - be resilient during tests
+            logger.warning("LLM ranking failed: %s", exc)
 
     # Check if the results are already sorted by price from the search_local_products call
     # This happens when the user asks for "cheapest" or "most expensive".
@@ -99,7 +124,15 @@ def get_ranked_products(intent: Dict[str, Any], city: str, top_n: int = 3) -> Li
 
     sort_by_param = intent.get("sort_by", "relevance")
 
-    warehouses = conversation_location.get_warehouses_for_city(city) if city else None
+    global conversation_location
+    if conversation_location is None:
+        try:
+            from ..utils import conversation_location as cl
+            conversation_location = cl
+        except Exception:  # pragma: no cover - keep optional for tests
+            conversation_location = None
+
+    warehouses = conversation_location.get_warehouses_for_city(city) if (city and conversation_location) else None
     results = product_service.search_local_products(
         query_text=query,
         limit=getattr(Config, "PRODUCT_SEARCH_LIMIT", 10),

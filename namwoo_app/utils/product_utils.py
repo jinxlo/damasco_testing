@@ -137,7 +137,9 @@ def group_products_by_model(products: List[Dict]) -> List[Dict]:
         all_colors = set()
         all_stores = set()
         for variant in variants:
-            color = _extract_color_from_name(variant.get("item_name", ""))
+            color = _extract_color_from_name(
+                variant.get("item_name") or variant.get("itemName", "")
+            )
             if color:
                 all_colors.add(color)
             branch = variant.get("branch_name")
@@ -147,9 +149,13 @@ def group_products_by_model(products: List[Dict]) -> List[Dict]:
         # Build the final grouped product dictionary using data from the representative,
         # but overriding with the aggregated color and store lists.
         final_product = dict(representative_product)
-        final_product['base_model_name'] = base_model # Use the cleaned base name for display
+        final_product['base_model_name'] = base_model  # Use the cleaned base name for display
         final_product['available_colors'] = sorted(list(all_colors))
         final_product['available_in_stores'] = sorted(list(all_stores))
+        # Backwards compatibility keys
+        final_product['model'] = base_model
+        final_product['colors'] = final_product['available_colors']
+        final_product['store'] = ", ".join(final_product['available_in_stores']) if final_product['available_in_stores'] else None
         result.append(final_product)
         
     return result
@@ -184,8 +190,8 @@ def _get_key_specs(product: Dict, user_query: Optional[str] = None) -> str:
 
 def format_product_response(grouped_product: Dict, user_query: Optional[str] = None) -> str:
     """Formats a single grouped product into the desired 'Product Card' string."""
-    # Use the cleaned base_model_name for the title to avoid showing a color in it.
-    model = grouped_product.get("base_model_name", "Producto")
+    # Use either the new or legacy key for the model name
+    model = grouped_product.get("base_model_name") or grouped_product.get("model", "Producto")
     
     price_usd = grouped_product.get("price")
     price_bs = grouped_product.get("price_bolivar") or grouped_product.get("priceBolivar")
@@ -195,13 +201,13 @@ def format_product_response(grouped_product: Dict, user_query: Optional[str] = N
     price_bs_str = f"Bs. {price_bs:,.2f}" if isinstance(price_bs, (int, float, Decimal)) else ""
 
     # Use the aggregated list of all available colors.
-    colors = grouped_product.get("available_colors", [])
+    colors = grouped_product.get("available_colors") or grouped_product.get("colors", [])
     colors_str = ", ".join(colors) if colors else "No especificado"
 
     description = _get_key_specs(grouped_product, user_query)
 
     # Use the aggregated list of all available stores.
-    stores = grouped_product.get("available_in_stores", [])
+    stores = grouped_product.get("available_in_stores") or ([] if grouped_product.get("store") is None else [grouped_product.get("store")])
     stores_str = f"Disponible en {', '.join(stores)}." if stores else ""
     
     card_lines = [
@@ -257,6 +263,25 @@ def format_product_list_response(products: List[Dict]) -> str:
         return "No encontré modelos que coincidan con tu búsqueda en este momento."
 
     lines.append("\n¿Te gustaría ver más detalles de alguno de estos modelos?")
+    return "\n".join(lines)
+
+
+def format_model_list_with_colors(products: List[Dict]) -> str:
+    """Formats a list of models with their available colors."""
+    if not products:
+        return "No encontré modelos que coincidan con tu búsqueda en este momento."
+
+    grouped = group_products_by_model(products)
+    if not grouped:
+        return "No encontré modelos que coincidan con tu búsqueda en este momento."
+
+    lines = ["¡Claro! Aquí tienes los modelos disponibles:\n"]
+    for product in grouped:
+        model_name = product.get("base_model_name", "Producto").strip()
+        colors = product.get("available_colors", [])
+        color_str = ", ".join(colors) if colors else "No especificado"
+        lines.append(f"🔹 {model_name}: {color_str}")
+
     return "\n".join(lines)
 
 
