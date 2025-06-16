@@ -25,8 +25,11 @@ except Exception:  # pragma: no cover - fallback for stripped test modules
 # Re-export helper for backward compatibility in tests
 try:
     user_is_asking_for_cheapest = product_utils.user_is_asking_for_cheapest
+    user_is_asking_for_list = product_utils.user_is_asking_for_list
 except AttributeError:  # pragma: no cover - stubbed in tests
     def user_is_asking_for_cheapest(message: str) -> bool:
+        return False
+    def user_is_asking_for_list(message: str) -> bool:
         return False
 import re
 
@@ -48,6 +51,7 @@ _REDACT_PATTERN = re.compile(
     r"(branchName\s*:?\s*\"[^\"]*\"|address\s*:?\s*\"[^\"]*\"|whsName\s*:?\s*\"[^\"]*\"|Almac[eé]n[^,\n]+|Direcci[oó]n\:[^\n]+)",
     re.IGNORECASE,
 )
+_SKU_PATTERN = re.compile(r'\b(D\d{4,})\b')
 
 def _redact_store_details(text: str) -> str:
     if not text:
@@ -125,6 +129,7 @@ def _extract_specs_from_query(query_text: str) -> List[str]:
     except Exception as e:
         logger.error(f"Unexpected error extracting specs: {e}", exc_info=True)
         return []
+
 
 # ---------------------------------------------------------------------------
 # Embedding Generation Function
@@ -316,13 +321,24 @@ def _tool_get_store_info(city_name: Optional[str] = None) -> str:
             return json.dumps({"status": "no_cities_found", "message": "No hay ciudades con tiendas configuradas en el sistema."}, ensure_ascii=False)
 
 
-def _tool_get_color_variants(item_code: str) -> str:
-    if not item_code:
-        return json.dumps({"status": "error", "message": "El parámetro item_code es requerido."}, ensure_ascii=False)
-    variants = product_service.get_color_variants_for_sku(item_code)
+def _tool_get_color_variants(product_identifier: str) -> str:
+    if not product_identifier:
+        return json.dumps({"status": "error", "message": "El parámetro product_identifier es requerido."}, ensure_ascii=False)
+    variants = product_service.get_color_variants(product_identifier)
     if variants is None:
         return json.dumps({"status": "error", "message": "No se pudo buscar variantes."}, ensure_ascii=False)
-    return json.dumps({"status": "success" if variants else "not_found", "variants": variants}, ensure_ascii=False, indent=2)
+    
+    # After getting the variant SKUs, we get the color names for a user-friendly response.
+    color_names = set()
+    for sku in variants:
+        color, _ = product_utils.extract_color_from_name(sku)
+        if color:
+            color_names.add(color)
+
+    # If SKUs were found but no colors could be extracted, return the SKUs themselves.
+    final_list = sorted(list(color_names)) if color_names else variants
+
+    return json.dumps({"status": "success" if final_list else "not_found", "variants": final_list}, ensure_ascii=False, indent=2)
 
 
 def sanitize_tool_args(args: Dict[str, Any], conversation_id: str) -> Dict[str, Any]:
@@ -415,14 +431,15 @@ tools_schema = [
                         "type": "string",
                         "description": (
                             "What the user is looking for, like 'phone for gaming' or 'cheap washing machine'. "
+                            "Include all technical specifications like '8gb ram' in the query. "
                             "Avoid pricing words; use 'sort_by' instead."
                         ),
                     },
-                    "filter_stock": {
+                    "exclude_accessories": {
                         "type": "boolean",
                         "description": (
-                            "Opcional. Si es true (defecto), filtra solo productos con stock. "
-                            "False si se quiere verificar si un producto existe en catálogo sin importar stock."
+                            "Set to false ONLY if the user is explicitly asking for accessories like cases or chargers. "
+                            "Defaults to true to filter out accessories from primary product searches."
                         ),
                         "default": True,
                     },
@@ -451,6 +468,11 @@ tools_schema = [
                         "type": "number",
                         "description": "Opcional. Umbral mínimo de similitud para aceptar un resultado. Valor por defecto 0.35.",
                     },
+                    "exclude_skus": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Opcional. Una lista de SKUs de productos a excluir de los resultados de búsqueda para evitar repeticiones."
+                    }
                 },
                 "required": ["query_text"],
             },
@@ -502,16 +524,16 @@ tools_schema = [
         "type": "function",
         "function": {
             "name": "get_color_variants",
-            "description": "Obtiene los distintos códigos de item (SKU) que representan el mismo producto en otros colores, basándose en el SKU proporcionado.",
+            "description": "Obtiene los distintos colores disponibles para un modelo de producto. Úsalo cuando el usuario pregunte '¿qué colores tienes para el [modelo]?'",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "item_code": {
+                    "product_identifier": {
                         "type": "string",
-                        "description": "SKU base del producto para buscar variantes de color."
+                        "description": "El nombre del modelo del producto (ej. 'TECNO SPARK 30C') o un SKU específico (ej. 'D0007783') para buscar sus variantes de color."
                     }
                 },
-                "required": ["item_code"]
+                "required": ["product_identifier"]
             }
         }
     },
@@ -584,59 +606,64 @@ tools_schema = [
     }
 ]
 
-# ---------------------------------------------------------------------------
-# Helper: format Support‑Board history for OpenAI
-# ---------------------------------------------------------------------------
-def _format_sb_history_for_openai(
-    sb_messages: Optional[List[Dict[str, Any]]],
-) -> List[Dict[str, Any]]:
-    if not sb_messages:
+def _extract_skus_from_text(text: str) -> List[str]:
+    """Extracts product SKUs (e.g., D0001234) from a string."""
+    if not text or not isinstance(text, str):
         return []
+    return _SKU_PATTERN.findall(text)
+
+# ---------------------------------------------------------------------------
+# Helper: format Support‑Board history for OpenAI and prune it
+# ---------------------------------------------------------------------------
+def _prune_and_format_sb_history(
+    sb_messages: Optional[List[Dict[str, Any]]],
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    if not sb_messages:
+        return [], []
+
+    # 1. First pass: convert to OpenAI format
     openai_messages: List[Dict[str, Any]] = []
     bot_user_id_str = str(Config.SUPPORT_BOARD_DM_BOT_USER_ID) if Config.SUPPORT_BOARD_DM_BOT_USER_ID else None
     if not bot_user_id_str:
         logger.error("Cannot format SB history: SUPPORT_BOARD_DM_BOT_USER_ID is not configured.")
-        return []
+        return [], []
+
     for msg in sb_messages:
         sender_id = msg.get("user_id")
         text_content = msg.get("message", "").strip()
-        attachments = msg.get("attachments")
-        image_urls: List[str] = []
-        if attachments and isinstance(attachments, list):
-            for att in attachments:
-                if (isinstance(att, dict) and att.get("url") and
-                    (att.get("type", "").startswith("image") or
-                     any(att["url"].lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp"]))):
-                    url = att["url"]
-                    if url.startswith(("http://", "https://")):
-                        image_urls.append(url)
-                    else:
-                        logger.warning("Skipping possible non‑public URL for attachment %s", url)
-        if not text_content and not image_urls:
+        
+        if not text_content:
             continue
         if sender_id is None:
             continue
+            
         role = "assistant" if str(sender_id) == bot_user_id_str else "user"
-        content_list_for_openai: List[Dict[str, Any]] = []
-        if text_content:
-            content_list_for_openai.append({"type": "text", "text": text_content})
+        openai_messages.append({"role": role, "content": text_content})
+    
+    # 2. Second pass: prune duplicates and extract SKUs
+    pruned_messages: List[Dict[str, Any]] = []
+    seen_signatures = set()
+    all_shown_skus = set()
 
-        current_openai_model = getattr(Config, "OPENAI_CHAT_MODEL", DEFAULT_OPENAI_MODEL)
-        is_vision_model = '4o' in current_openai_model.lower()
+    for msg in reversed(openai_messages):
+        role = msg.get('role')
+        content = msg.get('content')
+        
+        if role == 'assistant' and isinstance(content, str):
+            all_shown_skus.update(_extract_skus_from_text(content))
+        
+        # Create a signature to detect and remove exact duplicates
+        signature = f"{role}:{content}"
+        if signature not in seen_signatures:
+            pruned_messages.append(msg)
+            seen_signatures.add(signature)
+    
+    pruned_messages.reverse() # Restore chronological order
+    
+    logger.info(f"Original history had {len(openai_messages)} messages. Pruned to {len(pruned_messages)}.")
+    
+    return pruned_messages, list(all_shown_skus)
 
-        if image_urls and is_vision_model:
-            for img_url in image_urls:
-                content_list_for_openai.append({"type": "image_url", "image_url": {"url": img_url}})
-        elif image_urls:
-            logger.warning(f"Image URLs found but current model {current_openai_model} may not support vision. Images not sent.")
-            if not text_content:
-                 content_list_for_openai.append({"type": "text", "text": "[Usuario envió una imagen]"})
-        if content_list_for_openai:
-            if len(content_list_for_openai) == 1 and content_list_for_openai[0]["type"] == "text":
-                openai_messages.append({"role": role, "content": content_list_for_openai[0]["text"]})
-            else:
-                openai_messages.append({"role": role, "content": content_list_for_openai})
-    return openai_messages
 
 # ---------------------------------------------------------------------------
 # Main processing entry‑point
@@ -682,9 +709,10 @@ def process_new_message(
 
     sb_history_list = conversation_data.get("messages", [])
     try:
-        openai_history = _format_sb_history_for_openai(sb_history_list)
+        openai_history, previously_shown_skus = _prune_and_format_sb_history(sb_history_list)
+        logger.info(f"Identified {len(previously_shown_skus)} previously shown SKUs in conversation {sb_conversation_id}: {previously_shown_skus}")
     except Exception as err:
-        logger.exception(f"Error formatting SB history for Conv {sb_conversation_id}: {err}")
+        logger.exception(f"Error preparing and condensing SB history for Conv {sb_conversation_id}: {err}")
         support_board_service.send_reply_to_channel(
             conversation_id=sb_conversation_id, message_text="Lo siento, tuve problemas al procesar el historial de la conversación.",
             source=conversation_source, target_user_id=customer_user_id, conversation_details=conversation_data, triggering_message_id=triggering_message_id
@@ -692,16 +720,12 @@ def process_new_message(
         return
 
     if not openai_history:
-        if new_user_message and not sb_history_list:
-            logger.info(f"Formatted OpenAI history is empty for Conv {sb_conversation_id}, using new_user_message as initial prompt.")
-            openai_history = [{"role": "user", "content": new_user_message}]
-        else:
-            logger.error(f"Formatted OpenAI history is empty for Conv {sb_conversation_id}, and no new message or history. Aborting.")
-            support_board_service.send_reply_to_channel(
-                conversation_id=sb_conversation_id, message_text="Lo siento, no pude procesar los mensajes anteriores adecuadamente.",
-                source=conversation_source, target_user_id=customer_user_id, conversation_details=conversation_data, triggering_message_id=triggering_message_id
-            )
-            return
+        logger.error(f"Formatted OpenAI history is empty for Conv {sb_conversation_id}. Aborting.")
+        support_board_service.send_reply_to_channel(
+            conversation_id=sb_conversation_id, message_text="Lo siento, no pude procesar los mensajes anteriores adecuadamente.",
+            source=conversation_source, target_user_id=customer_user_id, conversation_details=conversation_data, triggering_message_id=triggering_message_id
+        )
+        return
 
     system_prompt_content = Config.SYSTEM_PROMPT
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt_content}] + openai_history
@@ -749,18 +773,58 @@ def process_new_message(
                         output_content_str = json.dumps({"status": "success" if brands else "not_found", "formatted_response": formatted_brands}, ensure_ascii=False)
                     elif fn_name == "search_local_products":
                         query_text = args.get("query_text", "")
-                        required_specs = _extract_specs_from_query(query_text)
-                        args['required_specs'] = required_specs
-                        user_city = conversation_location.get_conversation_city(sb_conversation_id)
-                        if user_city and 'warehouse_names' not in args:
-                            args['warehouse_names'] = conversation_location.get_warehouses_for_city(user_city)
+                        
+                        # ENFORCE LOCATION CONTEXT
+                        if 'warehouse_names' not in args or not args['warehouse_names']:
+                            logger.info("LLM did not provide warehouse_names. Checking for saved location context...")
+                            user_city = conversation_location.get_conversation_city(sb_conversation_id)
+                            if user_city:
+                                logger.info(f"Found saved city '{user_city}' for conv {sb_conversation_id}. Injecting warehouse names.")
+                                args['warehouse_names'] = conversation_location.get_warehouses_for_city(user_city)
+                            else:
+                                logger.warning(f"No warehouse_names from LLM and no saved city context for conv {sb_conversation_id}. Search will be nationwide.")
+                        
                         if "warehouse_names" in args and args["warehouse_names"]:
                             args["warehouse_names"] = [canonicalize_whs_name(n) for n in args["warehouse_names"]]
+                        
+                        # Re-introduce spec extraction and pass it to the search function
+                        required_specs = _extract_specs_from_query(query_text)
+                        args['required_specs'] = required_specs
+                        args['exclude_skus'] = previously_shown_skus
+                        
                         candidate_products = product_service.search_local_products(**args)
-                        ranked_products = product_recommender.rank_products(query_text, candidate_products) if Config.RECOMMENDER_MODE == 'llm' and candidate_products else candidate_products
-                        grouped_products = product_utils.group_products_by_model(ranked_products)
-                        formatted_response = product_utils.format_multiple_products_response(grouped_products, query_text)
-                        output_content_str = json.dumps({"status": "success" if grouped_products else "not_found", "formatted_response": formatted_response}, ensure_ascii=False)
+                        
+                        # --- CORRECTED FORMATTING LOGIC ---
+                        # Find the user message that most likely triggered this search chain.
+                        triggering_user_message_content = ""
+                        # Split the LLM's query to find the original user message.
+                        query_keywords = set(query_text.lower().split())
+                        for msg in reversed(messages):
+                            if msg.get("role") == "user":
+                                msg_content = msg.get("content", "").lower()
+                                # Check if the user message seems related to the query.
+                                if any(kw in msg_content for kw in query_keywords):
+                                    triggering_user_message_content = msg.get("content", "")
+                                    break
+                        # If no related message is found, fall back to the last user message.
+                        if not triggering_user_message_content:
+                            for msg in reversed(messages):
+                                if msg.get("role") == "user":
+                                    triggering_user_message_content = msg.get("content", "")
+                                    break
+                        
+                        is_list_request = product_utils.user_is_asking_for_list(triggering_user_message_content)
+
+                        if is_list_request:
+                            logger.info(f"List format requested based on user message: '{triggering_user_message_content}'")
+                            formatted_response = product_utils.format_product_list_response(candidate_products)
+                        else:
+                            logger.info(f"Recommendation format requested based on user message: '{triggering_user_message_content}'")
+                            ranked_grouped_products = product_recommender.rank_products(query_text, candidate_products)
+                            formatted_response = product_utils.format_multiple_products_response(ranked_grouped_products, query_text)
+                        
+                        output_content_str = json.dumps({"status": "success" if candidate_products else "not_found", "formatted_response": formatted_response}, ensure_ascii=False)
+                        
                     elif fn_name == "get_live_product_details":
                         ident = args.get("product_identifier")
                         id_type = args.get("identifier_type")
@@ -779,9 +843,7 @@ def process_new_message(
                                     details_result = product_utils.format_product_response(details_dict, query_text)
                         output_content_str = json.dumps({"status": "success" if details_result else "not_found", "formatted_response": details_result}, ensure_ascii=False)
                     elif fn_name == "get_color_variants":
-                        item_code_arg = args.get("item_code")
-                        variants = product_service.get_color_variants_for_sku(item_code_arg) if item_code_arg else []
-                        output_content_str = json.dumps({"status": "success", "variants": variants}, ensure_ascii=False)
+                        output_content_str = _tool_get_color_variants(**args)
                     elif fn_name == "find_relevant_accessory":
                         output_content_str = _tool_find_relevant_accessory(**args)
                     elif fn_name == "get_product_availability":

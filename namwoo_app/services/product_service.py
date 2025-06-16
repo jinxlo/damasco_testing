@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # --- Semantic Helpers ---
 _ACCESSORY_PAT = re.compile(
     r"(base para|soporte|mount|stand|bracket|control(?: remoto)?|adaptador|"
-    r"compresor|enfriador|deshumidificador)",
+    r"compresor|enfriador|deshumidificador|case|funda)",
     flags=re.I,
 )
 _MAIN_TYPE_PAT = re.compile(
@@ -45,19 +45,32 @@ def _extract_main_type(text: str) -> str:
     m = _MAIN_TYPE_PAT.search(text)
     return m.group(0).lower() if m else ""
 
+def _extract_color_from_name(item_name: str) -> Optional[str]:
+    """Extracts a color from the end of a product name string."""
+    if not item_name:
+        return None
+    # This pattern should match colors at the very end of the string.
+    COLOR_EXTRACT_PAT = re.compile(
+        r'\b(NEGRO|BLANCO|AZUL|VERDE|ROJO|GRIS|DORADO|PLATEADO|PURPURA|MORADO|AMARILLO|NARANJA|PLATA|GRAFITO|ROSADO|PERLADO)$',
+        flags=re.IGNORECASE
+    )
+    match = COLOR_EXTRACT_PAT.search(item_name.upper())
+    return match.group(1).capitalize() if match else None
+
 
 # --- Search Products ---
 def search_local_products(
     query_text: str,
-    limit: int = 30,
+    limit: int = 20,
     filter_stock: bool = True,
     min_score: float = 0.35,
     warehouse_names: Optional[List[str]] = None,
     min_price: Optional[Union[float, int, str]] = None,
     max_price: Optional[Union[float, int, str]] = None,
     sort_by: Optional[str] = None,
-    exclude_accessories: bool = False,
+    exclude_accessories: bool = True,
     required_specs: Optional[List[str]] = None,
+    exclude_skus: Optional[List[str]] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     if not query_text or not isinstance(query_text, str):
         logger.warning("Search query is empty or invalid.")
@@ -65,198 +78,147 @@ def search_local_products(
 
     log_message_parts = [
         f"Vector search initiated: '{query_text[:80]}…'",
-        f"limit={limit}",
-        f"stock_filter={filter_stock}",
-        f"min_score={min_score:.2f}",
+        f"limit={limit}", f"stock_filter={filter_stock}", f"min_score={min_score:.2f}",
     ]
     if warehouse_names:
-        warehouse_names = [canonicalize_whs(w) for w in warehouse_names if w]
         log_message_parts.append(f"warehouses={warehouse_names}")
     if required_specs:
         log_message_parts.append(f"required_specs={required_specs}")
-    if min_price is not None:
-        log_message_parts.append(f"min_price={min_price}")
-    if max_price is not None:
-        log_message_parts.append(f"max_price={max_price}")
-    if sort_by:
-        log_message_parts.append(f"sort_by={sort_by}")
-    if exclude_accessories:
-        log_message_parts.append("exclude_accessories=True")
 
     logger.info(", ".join(log_message_parts))
-    logger.debug(
-        "search_local_products args - query_text=%s, limit=%s, filter_stock=%s, min_score=%s, warehouses=%s, min_price=%s, max_price=%s, sort_by=%s, exclude_accessories=%s, required_specs=%s",
-        query_text,
-        limit,
-        filter_stock,
-        min_score,
-        warehouse_names,
-        min_price,
-        max_price,
-        sort_by,
-        exclude_accessories,
-        required_specs,
-    )
 
-    embedding_model = (
-        Config.OPENAI_EMBEDDING_MODEL
-        if hasattr(Config, "OPENAI_EMBEDDING_MODEL")
-        else "text-embedding-3-small"
-    )
+    embedding_model = (Config.OPENAI_EMBEDDING_MODEL if hasattr(Config, "OPENAI_EMBEDDING_MODEL") else "text-embedding-3-small")
     query_emb = embedding_utils.get_embedding(query_text, model=embedding_model)
     if not query_emb:
         logger.error("Query embedding generation failed – aborting search.")
         return None
-    logger.debug(
-        "Generated embedding length: %d using model %s", len(query_emb), embedding_model
-    )
 
     with db_utils.get_db_session() as session:
         if not session:
             logger.error("DB session unavailable for search.")
             return None
         try:
-            q = session.query(
+            # Stage 1: De-duplicated Primary Search for Unique Models.
+            base_q = session.query(
                 Product,
-                (1 - Product.embedding.cosine_distance(query_emb)).label("similarity"),
+                Product.embedding.cosine_distance(query_emb).label("distance"),
             )
-            applied_filters = ["cosine_distance"]
+
             if filter_stock:
-                q = q.filter(Product.stock > 0)
-                applied_filters.append("stock>0")
-
-            if warehouse_names:
-                q = q.filter(Product.warehouse_name_canonical.in_(warehouse_names))
-                applied_filters.append(f"warehouses={warehouse_names}")
+                base_q = base_q.filter(Product.stock > 0)
             
-            if required_specs:
-                for spec in required_specs:
-                    normalized_spec = spec.lower().replace(" ", "")
-                    like_pattern = f"%{normalized_spec}%"
-                    
-                    q = q.filter(
-                        or_(
-                            func.lower(func.replace(Product.item_name, ' ', '')).like(like_pattern),
-                            func.lower(func.replace(Product.description, ' ', '')).like(like_pattern),
-                            func.lower(func.replace(Product.especificacion, ' ', '')).like(like_pattern),
-                            func.lower(func.replace(Product.searchable_text_content, ' ', '')).like(like_pattern)
-                        )
-                    )
-                    applied_filters.append(f"spec:{spec} (normalized: {normalized_spec})")
-                logger.info(f"Applied robust hard filters for specs: {required_specs}")
+            canonical_whs = [canonicalize_whs(w) for w in warehouse_names if w] if warehouse_names else None
+            if canonical_whs:
+                base_q = base_q.filter(Product.warehouse_name_canonical.in_(canonical_whs))
 
-            if min_price is not None:
-                try:
-                    min_price_decimal = Decimal(str(min_price)).quantize(
-                        Decimal("0.01")
-                    )
-                    q = q.filter(Product.price >= min_price_decimal)
-                    applied_filters.append(f"price>={min_price_decimal}")
-                except InvalidDecimalOperation:
-                    logger.warning(
-                        f"Invalid min_price value '{min_price}' provided. Ignoring min_price filter."
-                    )
-
-            if max_price is not None:
-                try:
-                    max_price_decimal = Decimal(str(max_price)).quantize(
-                        Decimal("0.01")
-                    )
-                    q = q.filter(Product.price <= max_price_decimal)
-                    applied_filters.append(f"price<={max_price_decimal}")
-                except InvalidDecimalOperation:
-                    logger.warning(
-                        f"Invalid max_price value '{max_price}' provided. Ignoring max_price filter."
-                    )
-
-            diagnostic_q = q.order_by(
-                Product.embedding.cosine_distance(query_emb)
-            ).limit(limit)
-            diagnostic_rows: List[Tuple[Product, float]] = diagnostic_q.all()
-            logger.debug("Applied filters for diagnostic query: %s", applied_filters)
-            logger.debug(
-                "Diagnostic - Top %d products before min_score filter:",
-                len(diagnostic_rows),
-            )
-            for prod_entry_diag, sim_score_diag in diagnostic_rows:
-                logger.info(
-                    f"  - Product: {prod_entry_diag.item_name}, ID: {prod_entry_diag.id}, "
-                    f"Similarity: {sim_score_diag:.4f}, Price: {prod_entry_diag.price}, "
-                    f"Stock: {prod_entry_diag.stock}, Warehouse: {prod_entry_diag.warehouse_name}"
-                )
-
-            logger.info(
-                f"[VECTOR SEARCH] Top similarity score: {diagnostic_rows[0][1]:.4f}"
-                if diagnostic_rows
-                else "[VECTOR SEARCH] Top similarity score: No results"
-            )
-
-            q_final = q.filter(
-                (1 - Product.embedding.cosine_distance(query_emb)) >= min_score
-            )
-            if sort_by == "price_asc":
-                q_final = q_final.order_by(Product.price.asc()).limit(limit)
-            elif sort_by == "price_desc":
-                q_final = q_final.order_by(Product.price.desc()).limit(limit)
-            else:
-                q_final = q_final.order_by(
-                    Product.embedding.cosine_distance(query_emb)
-                ).limit(limit)
-
-            rows: List[Tuple[Product, float]] = q_final.all()
-            logger.debug("DB returned %d rows after final filters", len(rows))
-
-            final_rows = rows
-            if not final_rows and diagnostic_rows:
-                logger.warning(
-                    f"Top similarity {diagnostic_rows[0][1]:.4f} was below threshold {min_score} or no results passed hard spec filters. Returning fallback result."
-                )
-                final_rows = diagnostic_rows[:1]
-            results: List[Dict[str, Any]] = []
-            for prod_location_entry, sim_score in final_rows:
-                item_dict = prod_location_entry.to_dict(include_source=True)
-                item_dict.update(
-                    {
-                        "similarity": round(float(sim_score), 4),
-                        "is_accessory": _is_accessory(
-                            prod_location_entry.item_name or ""
-                        ),
-                        "main_type": _extract_main_type(
-                            prod_location_entry.item_name or ""
-                        ),
-                        "llm_formatted_description": prod_location_entry.format_for_llm(),
-                    }
-                )
-                results.append(item_dict)
+            if exclude_skus:
+                base_q = base_q.filter(Product.item_code.notin_(exclude_skus))
+            
             if exclude_accessories:
-                results = [r for r in results if not r.get("is_accessory")]
+                base_q = base_q.filter(Product.sub_category.notilike('%ACCESORIO%'))
+                base_q = base_q.filter(Product.category.notilike('%ACCESORIO%'))
 
-            if not results and filter_stock:
-                logger.info(
-                    "No products found with stock filter applied. Retrying without stock filter for reference."
-                )
-                return search_local_products(
-                    query_text,
-                    limit=limit,
-                    filter_stock=False,
-                    min_score=min_score,
-                    warehouse_names=warehouse_names,
-                    min_price=min_price,
-                    max_price=max_price,
-                    sort_by=sort_by,
-                    exclude_accessories=exclude_accessories,
-                    required_specs=required_specs,
-                )
+            ranked_subquery = base_q.add_column(
+                func.row_number().over(
+                    partition_by=Product.item_code,
+                    order_by=Product.embedding.cosine_distance(query_emb).asc()
+                ).label('rn')
+            ).subquery('ranked_products')
 
-            if not results:
-                logger.info(
-                    "Vector search completed but no products matched the criteria."
-                )
-                return []
+            unique_candidates_q = session.query(ranked_subquery).filter(ranked_subquery.c.rn == 1)
 
-            logger.info(f"[VECTOR SEARCH] Results returned: {len(results)}")
+            if sort_by == "price_asc":
+                unique_candidates_q = unique_candidates_q.order_by(ranked_subquery.c.price.asc())
+            elif sort_by == "price_desc":
+                unique_candidates_q = unique_candidates_q.order_by(ranked_subquery.c.price.desc())
+            else:
+                unique_candidates_q = unique_candidates_q.order_by(ranked_subquery.c.distance.asc())
 
-            return results
+            # Fetch more candidates than needed to allow for filtering
+            candidate_rows = unique_candidates_q.limit(limit * 3).all()
+            logger.info(f"Stage 1 Search: Found {len(candidate_rows)} unique semantic candidates.")
+
+            # Stage 2: Post-filtering and Enrichment
+            if required_specs:
+                filtered_candidates = []
+                for row in candidate_rows:
+                    # CORRECTED: Expand authoritative text to include all relevant fields.
+                    authoritative_text = f"{row.item_name or ''} {row.especificacion or ''} {row.description or ''}".lower()
+                    
+                    all_specs_met = True
+                    for spec in required_specs:
+                        spec_lower = spec.lower()
+                        # Extract numeric parts from the spec, e.g., '8' from '8gb'
+                        spec_nums = re.findall(r'\d+', spec_lower)
+                        
+                        # If the spec is purely textual (e.g., 'amoled')
+                        if not spec_nums:
+                            if spec_lower not in authoritative_text:
+                                all_specs_met = False
+                                break
+                            continue
+
+                        # If the spec has a numeric component (e.g., '8gb')
+                        num_found_in_text = False
+                        for num in spec_nums:
+                            # Regex: find the number surrounded by non-alphanumeric chars or start/end of string.
+                            # This correctly finds '8' in '256+8', '(8gb)' or 'RAM: 8gb' but not in '128'.
+                            pattern = r'(?:^|\D)' + re.escape(num) + r'(?:\D|$)'
+                            if re.search(pattern, authoritative_text):
+                                num_found_in_text = True
+                                break
+                        
+                        if not num_found_in_text:
+                            all_specs_met = False
+                            break
+                    
+                    if all_specs_met:
+                        filtered_candidates.append(row)
+
+                logger.info(f"Post-filtered candidates down to {len(filtered_candidates)} based on specs: {required_specs}")
+                candidate_rows = filtered_candidates
+
+            enriched_results = []
+            for row in candidate_rows[:limit]: # Apply final limit after filtering
+                representative_product_dict = row._asdict()
+                similarity = 1 - float(representative_product_dict['distance'])
+                if similarity < min_score:
+                    continue
+
+                base_model_name = product_utils.get_base_model_name(representative_product_dict['item_name'])
+
+                variants_and_locations_q = session.query(
+                    Product.item_name, Product.branch_name
+                ).filter(
+                    Product.item_name.ilike(f"{base_model_name}%"),
+                    Product.stock > 0
+                ).distinct()
+
+                if canonical_whs:
+                    variants_and_locations_q = variants_and_locations_q.filter(Product.warehouse_name_canonical.in_(canonical_whs))
+
+                available_variants_info = variants_and_locations_q.all()
+                if not available_variants_info:
+                    continue
+
+                all_colors = set()
+                all_locations = set()
+                for variant_info in available_variants_info:
+                    color = _extract_color_from_name(variant_info.item_name)
+                    if color: all_colors.add(color)
+                    if variant_info.branch_name: all_locations.add(variant_info.branch_name)
+
+                final_product_dict = representative_product_dict
+                final_product_dict['similarity'] = round(similarity, 4)
+                final_product_dict['available_in_stores'] = sorted(list(all_locations))
+                final_product_dict['available_colors'] = sorted(list(all_colors)) if all_colors else ["No especificado"]
+                final_product_dict['base_model_name'] = base_model_name
+
+                enriched_results.append(final_product_dict)
+
+            logger.info(f"[VECTOR SEARCH] Final enriched results returned: {len(enriched_results)}")
+            return enriched_results
+
         except SQLAlchemyError as db_exc:
             logger.exception("Database error during product search: %s", db_exc)
             return None
@@ -497,7 +459,7 @@ def get_live_product_details_by_sku(
             return None
         try:
             product_entries = (
-                session.query(Product).filter_by(item_code=normalized_item_code).all()
+                session.query(Product).filter(Product.item_code.ilike(normalized_item_code)).all()
             )
             if not product_entries:
                 logger.info(
@@ -546,38 +508,51 @@ def get_live_product_details_by_id(composite_id: str) -> Optional[Dict[str, Any]
             )
             return None
 
-def get_color_variants_for_sku(item_code_query: str) -> Optional[List[str]]:
-    if not item_code_query:
-        logger.error("get_color_variants_for_sku: Missing item_code_query argument.")
+def get_color_variants(product_identifier: str) -> Optional[List[str]]:
+    """
+    Gets color variants for a product, accepting either a specific SKU
+    or a general model name.
+    """
+    if not product_identifier:
+        logger.error("get_color_variants: Missing product_identifier argument.")
         return None
-    base_code = product_utils.strip_color_suffix(str(item_code_query).strip())
-    if not base_code:
-        return []
+
+    identifier = str(product_identifier).strip()
+    # A simple heuristic to differentiate SKU from model name.
+    is_sku = bool(re.match(r'^D\d+$', identifier, re.IGNORECASE))
+
     with db_utils.get_db_session() as session:
         if not session:
-            logger.error("DB session unavailable for get_color_variants_for_sku.")
+            logger.error("DB session unavailable for get_color_variants.")
             return None
         try:
-            like_pattern = f"{base_code}%"
+            if is_sku:
+                logger.info(f"Identifier '{identifier}' treated as SKU. Finding variants based on its base model.")
+                base_code = product_utils.strip_color_suffix(identifier)
+                like_pattern = f"{base_code}%"
+            else:
+                logger.info(f"Identifier '{identifier}' treated as model name. Finding variants via ILIKE.")
+                like_pattern = f"%{product_utils.get_base_model_name(identifier)}%"
+
             rows = (
                 session.query(Product.item_code)
-                .filter(Product.item_code.ilike(like_pattern))
+                .filter(Product.item_name.ilike(like_pattern))
                 .distinct()
                 .all()
             )
             variants = sorted({r[0] for r in rows if r[0]})
             logger.info(
-                "Found %d potential color variants for base code %s", len(variants), base_code
+                "Found %d potential color variants for identifier '%s'", len(variants), identifier
             )
             return variants
         except SQLAlchemyError as db_exc:
             logger.exception(
-                "DB error fetching color variants for %s: %s", base_code, db_exc
+                "DB error fetching color variants for %s: %s", identifier, db_exc
             )
             return None
         except Exception as exc:
             logger.exception(
-                "Unexpected error fetching color variants for %s: %s", base_code, exc
+                "Unexpected error fetching color variants for %s: %s", identifier, exc
             )
             return None
 

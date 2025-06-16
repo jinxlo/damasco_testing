@@ -23,7 +23,7 @@ import logging
 import json
 import os
 import re
-from typing import List, Dict, Optional, Any, Union
+from typing import List, Dict, Optional, Any, Union, Tuple
 
 from openai import ( # This lib is used for the OpenAI-compatible Gemini endpoint
     OpenAI, APIError, RateLimitError, APITimeoutError, BadRequestError
@@ -71,11 +71,6 @@ TOOL_CALL_RETRY_LIMIT = 2
 DEFAULT_GOOGLE_MODEL = getattr(Config, "GOOGLE_GEMINI_MODEL", "gemini-1.5-flash-latest")
 DEFAULT_MAX_TOKENS = getattr(Config, "GOOGLE_MAX_TOKENS", 1024)
 DEFAULT_GOOGLE_TEMPERATURE = getattr(Config, "GOOGLE_TEMPERATURE", 0.7)
-
-# --- LLM Helper: Specification Extraction ---
-# This helper is now shared implicitly via `product_service` but could be defined here too if needed.
-# For simplicity, we'll call the one in openai_service as it's a generic LLM task.
-from .openai_service import _extract_specs_from_query
 
 # --- LLM Helper: Product Description Summarization ---
 def get_google_product_summary(
@@ -168,38 +163,73 @@ def _tool_send_whatsapp_order_summary_template(customer_platform_user_id: str, c
     ok = support_board_service.send_whatsapp_template(to=customer_platform_user_id, template_name="confirmacion_datos_cliente", template_languages="es_ES", parameters=template_variables, recipient_id=conversation_id)
     return {"status": "success" if ok else "failed"}
 
+def _tool_get_color_variants(product_identifier: str) -> str:
+    if not product_identifier:
+        return json.dumps({"status": "error", "message": "El parámetro product_identifier es requerido."}, ensure_ascii=False)
+    variants = product_service.get_color_variants(product_identifier)
+    if variants is None:
+        return json.dumps({"status": "error", "message": "No se pudo buscar variantes."}, ensure_ascii=False)
+    
+    color_names = set()
+    for sku in variants:
+        color, _ = product_utils.extract_color_from_name(sku)
+        if color:
+            color_names.add(color)
+
+    final_list = sorted(list(color_names)) if color_names else variants
+    return json.dumps({"status": "success" if final_list else "not_found", "variants": final_list}, ensure_ascii=False, indent=2)
+
 # --- Tool Schema (Feature-Parity with openai_service.py) ---
-# This schema is now identical to the one in openai_service.py
 tools_schema = [
     {"type":"function","function":{"name":"get_store_info","description":"Obtiene información de las tiendas Damasco, como direcciones y nombres de almacén (whsName) para búsquedas de productos. Puede filtrar por ciudad o listar todas las ciudades con tiendas.","parameters":{"type":"object","properties":{"city_name":{"type":"string","description":"Opcional. El nombre de la ciudad para la cual obtener información de tiendas. Si se omite, se devuelve una lista de todas las ciudades con tiendas."}},"required":[]}}},
-    {"type":"function","function":{"name":"search_local_products","description":"Busca productos específicos por características, precio y uso previsto. Utilízala cuando el usuario solicite productos en particular. Para preguntas generales sobre marcas disponibles usa `get_available_brands`.","parameters":{"type":"object","properties":{"query_text":{"type":"string","description":"What the user is looking for, like 'phone for gaming' or 'cheap washing machine'. Avoid pricing words; use 'sort_by' instead."}, "filter_stock":{"type":"boolean","description":"Opcional. Si es true (defecto), filtra solo productos con stock. False si se quiere verificar si un producto existe en catálogo sin importar stock.","default":True},"warehouse_names":{"type":"array","items":{"type":"string"},"description":"List of `whsName` values returned from `get_store_info`. Do NOT use `branchName` or city names. Use values like 'Almacen Principal CCCT'."},"min_price":{"type":"number","description":"Use if user provides a price range or max budget."},"max_price":{"type":"number","description":"Use if user provides a price range or max budget."},"sort_by":{"type":"string","description":"Use 'price_asc' for queries like 'cheapest', 'most affordable'. Use 'price_desc' for 'most expensive'. Otherwise use 'relevance'."},"limit":{"type":"integer","description":"Opcional. Número máximo de resultados a retornar."},"min_score":{"type":"number","description":"Opcional. Umbral mínimo de similitud para aceptar un resultado. Valor por defecto 0.35."}},"required":["query_text"]}}},
+    {"type":"function","function":{"name":"search_local_products","description":"Busca productos específicos por características, precio y uso previsto. Utilízala cuando el usuario solicite productos en particular. Para preguntas generales sobre marcas disponibles usa `get_available_brands`.","parameters":{"type":"object","properties":{"query_text":{"type":"string","description":"What the user is looking for, like 'phone for gaming' or 'cheap washing machine'. Include all technical specifications like '8gb ram' in the query. Avoid pricing words; use 'sort_by' instead."},"exclude_accessories":{"type":"boolean","description":"Set to false ONLY if the user is explicitly asking for accessories like cases or chargers. Defaults to true to filter out accessories from primary product searches.","default":True},"warehouse_names":{"type":"array","items":{"type":"string"},"description":"List of `whsName` values returned from `get_store_info`. Do NOT use `branchName` or city names. Use values like 'Almacen Principal CCCT'."},"min_price":{"type":"number","description":"Use if user provides a price range or max budget."},"max_price":{"type":"number","description":"Use if user provides a price range or max budget."},"sort_by":{"type":"string","description":"Use 'price_asc' for queries like 'cheapest', 'most affordable'. Use 'price_desc' for 'most expensive'. Otherwise use 'relevance'."},"limit":{"type":"integer","description":"Opcional. Número máximo de resultados a retornar."},"min_score":{"type":"number","description":"Opcional. Umbral mínimo de similitud para aceptar un resultado. Valor por defecto 0.35."},"exclude_skus":{"type":"array","items":{"type":"string"},"description":"Opcional. Una lista de SKUs de productos a excluir de los resultados de búsqueda para evitar repeticiones."}},"required":["query_text"]}}},
     {"type":"function","function":{"name":"get_available_brands","description":"Returns a list of all available product brands. Use this when the user asks 'what brands do you have?' or similar questions.","parameters":{"type":"object","properties":{"category":{"type":"string","description":"Opcional. Categoría de producto para filtrar las marcas, por ejemplo 'Celular'."}},"required":[]}}},
     {"type":"function","function":{"name":"get_live_product_details","description":"Obtiene información detallada y actualizada de un producto específico de Damasco, incluyendo precio (USD), precio en Bolívares (`priceBolivar`), y stock por sucursal. Usar cuando el usuario pregunta por un producto específico (por SKU/código) o después de `search_local_products` si quiere más detalles.","parameters":{"type":"object","properties":{"product_identifier":{"type":"string","description":"El código de item (SKU) del producto o el ID compuesto (itemCode_warehouseName)."},"identifier_type":{"type":"string","enum":["sku","composite_id"],"description":"Especifica si 'product_identifier' es 'sku' (para todas las ubicaciones) o 'composite_id' (para una ubicación específica)."}},"required":["product_identifier","identifier_type"]}}},
-    {"type":"function","function":{"name":"get_color_variants","description":"Obtiene los distintos códigos de item (SKU) que representan el mismo producto en otros colores, basándose en el SKU proporcionado.","parameters":{"type":"object","properties":{"item_code":{"type":"string","description":"SKU base del producto para buscar variantes de color."}},"required":["item_code"]}}},
-    {"type":"function","function":{"name":"send_whatsapp_order_summary_template","description":"Envía la plantilla de resumen de pedido 'confirmacion_datos_cliente' por WhatsApp al cliente una vez que se hayan recolectado todos los datos necesarios (nombre, apellido, cédula, teléfono, correo, dirección, productos y total).","parameters":{"type":"object","properties":{"customer_platform_user_id":{"type":"string","description":"ID del usuario en la plataforma de mensajería (generalmente el número de teléfono para WhatsApp, o el ID de usuario interno si es un cliente existente)."},"conversation_id":{"type":"string","description":"ID de la conversación actual de Support Board."},"template_variables":{"type":"array","description":"Lista de EXACTAMENTE 8 cadenas en el siguiente orden: 1. Nombre(s) del cliente, 2. Apellido(s) del cliente, 3. Cédula, 4. Teléfono de contacto, 5. Correo electrónico, 6. Dirección de envío/facturación, 7. Descripción de los productos (ej: 'Producto A x1, Producto B x2'), 8. Precio total (ej: '$125.50 USD').","items":{"type":"string"},"minItems":8,"maxItems":8}},"required":["customer_platform_user_id","conversation_id","template_variables"]}}}
+    {"type":"function","function":{"name":"get_color_variants","description":"Obtiene los distintos colores disponibles para un modelo de producto. Úsalo cuando el usuario pregunte '¿qué colores tienes para el [modelo]?'","parameters":{"type":"object","properties":{"product_identifier":{"type":"string","description":"El nombre del modelo del producto (ej. 'TECNO SPARK 30C') o un SKU específico (ej. 'D0007783') para buscar sus variantes de color."}},"required":["product_identifier"]}}},
+    {"type":"function","function":{"name":"send_whatsapp_order_summary_template","description":"Envía la plantilla de resumen de pedido 'confirmacion_datos_cliente' por WhatsApp al cliente una vez que se hayan recolectado todos los datos necesarios (nombre, apellido, cédula, teléfono, correo, dirección de la sucursal, productos y total).","parameters":{"type":"object","properties":{"customer_platform_user_id":{"type":"string","description":"ID del usuario en la plataforma de mensajería (generalmente el número de teléfono para WhatsApp, o el ID de usuario interno si es un cliente existente)."},"conversation_id":{"type":"string","description":"ID de la conversación actual de Support Board."},"template_variables":{"type":"array","description":"Lista de EXACTAMENTE 8 cadenas en el siguiente orden: 1. Nombre(s) del cliente, 2. Apellido(s) del cliente, 3. Cédula, 4. Teléfono de contacto, 5. Correo electrónico, 6. Nombre de la sucursal de retiro, 7. Descripción de los productos (ej: 'Producto A x1, Producto B x2'), 8. Precio total (ej: '$125.50 USD').","items":{"type":"string"},"minItems":8,"maxItems":8}},"required":["customer_platform_user_id","conversation_id","template_variables"]}}}
 ]
 
+_SKU_PATTERN = re.compile(r'\b(D\d{4,})\b')
+def _extract_skus_from_text(text: str) -> List[str]:
+    if not text or not isinstance(text, str):
+        return []
+    return _SKU_PATTERN.findall(text)
+
 # --- Helper: Format SB history for Gemini ---
-def _format_sb_history_for_gemini(sb_messages: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-    # This function is now aligned with the OpenAI version for consistency.
-    if not sb_messages: return []
-    gemini_messages: List[Dict[str, Any]] = []
-    bot_user_id_str = str(Config.SUPPORT_BOARD_DM_BOT_USER_ID)
+def _prune_and_format_sb_history_for_gemini(sb_messages: Optional[List[Dict[str, Any]]]) -> Tuple[List[Dict[str, Any]], List[str]]:
+    if not sb_messages: return [], []
+    
+    openai_messages: List[Dict[str, Any]] = []
+    bot_user_id_str = str(Config.SUPPORT_BOARD_DM_BOT_USER_ID) if Config.SUPPORT_BOARD_DM_BOT_USER_ID else None
     if not bot_user_id_str:
         logger.error("[Namwoo-Gemini] Cannot format SB history: SUPPORT_BOARD_DM_BOT_USER_ID is not configured.")
-        return []
+        return [], []
 
     for msg in sb_messages:
         sender_id = msg.get("user_id")
         text_content = msg.get("message", "").strip()
-        # For simplicity and because Gemini vision via OpenAI lib is complex, we currently only handle text.
-        # This can be expanded later if vision is a priority for Gemini.
-        if not text_content: continue
-        if sender_id is None: continue
-
+        if not text_content or sender_id is None: continue
+        
         role = "assistant" if str(sender_id) == bot_user_id_str else "user"
-        gemini_messages.append({"role": role, "content": text_content})
-    return gemini_messages
+        openai_messages.append({"role": role, "content": text_content})
+    
+    pruned_messages: List[Dict[str, Any]] = []
+    seen_signatures = set()
+    all_shown_skus = set()
+
+    for msg in reversed(openai_messages):
+        role, content = msg.get('role'), msg.get('content')
+        if role == 'assistant' and isinstance(content, str):
+            all_shown_skus.update(_extract_skus_from_text(content))
+        
+        signature = f"{role}:{content}"
+        if signature not in seen_signatures:
+            pruned_messages.append(msg)
+            seen_signatures.add(signature)
+    
+    pruned_messages.reverse()
+    logger.info(f"[Namwoo-Gemini] Original history had {len(openai_messages)} messages. Pruned to {len(pruned_messages)}.")
+    return pruned_messages, list(all_shown_skus)
 
 # --- Main Processing Entry Point ---
 def process_new_message_gemini(
@@ -227,9 +257,7 @@ def process_new_message_gemini(
         support_board_service.send_reply_to_channel(conversation_id=sb_conversation_id, message_text="Lo siento, tuve problemas para acceder al historial de esta conversación.", source=conversation_source, target_user_id=customer_user_id, triggering_message_id=triggering_message_id)
         return
 
-    gemini_history = _format_sb_history_for_gemini(conversation_data.get("messages", []))
-    if not gemini_history and new_user_message:
-        gemini_history = [{"role": "user", "content": new_user_message}]
+    gemini_history, previously_shown_skus = _prune_and_format_sb_history_for_gemini(conversation_data.get("messages", []))
     if not gemini_history:
         logger.error(f"[Namwoo-Gemini] Formatted history is empty for Conv {sb_conversation_id}. Aborting.")
         return
@@ -264,18 +292,29 @@ def process_new_message_gemini(
                         brands = product_service.get_available_brands(**args)
                         output_str = json.dumps({"status": "success", "formatted_response": product_utils.format_brand_list(brands)}, ensure_ascii=False)
                     elif fn_name == "search_local_products":
-                        query_text = args.get("query_text", "")
-                        args['required_specs'] = _extract_specs_from_query(query_text)
                         if 'warehouse_names' not in args and (city := conversation_location.get_conversation_city(sb_conversation_id)):
                             args['warehouse_names'] = conversation_location.get_warehouses_for_city(city)
                         if "warehouse_names" in args and args["warehouse_names"]:
                             args["warehouse_names"] = [canonicalize_whs_name(n) for n in args["warehouse_names"]]
                         
-                        candidates = product_service.search_local_products(**args)
-                        ranked = product_recommender.rank_products(query_text, candidates) if Config.RECOMMENDER_MODE == 'llm' and candidates else candidates
-                        grouped = product_utils.group_products_by_model(ranked)
-                        formatted_response = product_utils.format_multiple_products_response(grouped, query_text)
-                        output_str = json.dumps({"status": "success", "formatted_response": formatted_response}, ensure_ascii=False)
+                        args['exclude_skus'] = previously_shown_skus
+                        
+                        candidate_products = product_service.search_local_products(**args)
+                        
+                        last_user_message_content = ""
+                        for msg in reversed(messages):
+                            if msg.get("role") == "user":
+                                last_user_message_content = msg.get("content", "")
+                                break
+
+                        is_list_request = product_utils.user_is_asking_for_list(last_user_message_content)
+                        if is_list_request:
+                            formatted_response = product_utils.format_product_list_response(candidate_products)
+                        else:
+                            ranked_products = product_recommender.rank_products(args.get("query_text", ""), candidate_products)
+                            formatted_response = product_utils.format_multiple_products_response(ranked_products, args.get("query_text", ""))
+                        
+                        output_str = json.dumps({"status": "success" if candidate_products else "not_found", "formatted_response": formatted_response}, ensure_ascii=False)
                     elif fn_name == "get_live_product_details":
                         ident, id_type = args.get("product_identifier"), args.get("identifier_type")
                         query_text = messages[-2].get('content', '') if len(messages) > 1 else ''
@@ -288,8 +327,7 @@ def process_new_message_gemini(
                             if details_dict: details = product_utils.format_product_response(details_dict, query_text)
                         output_str = json.dumps({"status": "success" if details else "not_found", "formatted_response": details}, ensure_ascii=False)
                     elif fn_name == "get_color_variants":
-                        variants = product_service.get_color_variants_for_sku(args.get("item_code"))
-                        output_str = json.dumps({"status": "success", "variants": variants}, ensure_ascii=False)
+                        output_str = _tool_get_color_variants(**args)
                     elif fn_name == "send_whatsapp_order_summary_template":
                         cust_id = args.get("customer_platform_user_id") or customer_user_id
                         conv_id = args.get("conversation_id") or sb_conversation_id

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import List, Dict, Any, Optional
 
 from openai import OpenAI
@@ -40,42 +41,53 @@ def _prepare_candidate(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def rank_products(user_intent: str, candidates: List[Dict[str, Any]], top_n: int = 3) -> List[Dict[str, Any]]:
-    """Use the configured LLM to intelligently rank candidate products."""
+    """
+    Intelligently ranks and selects products.
+    - For initial relevance-based searches, it provides a low-mid-high price spread.
+    - For explicit price-sorted searches (e.g., "cheapest"), it respects that order.
+    """
     if not candidates:
         return []
 
-    mode = getattr(Config, "RECOMMENDER_MODE", "llm")
-    model = getattr(Config, "RECOMMENDER_LLM_MODEL", "gpt-4.1")
-    if mode != "llm" or not _llm_client:
+    # Check if the results are already sorted by price from the search_local_products call
+    # This happens when the user asks for "cheapest" or "most expensive".
+    is_price_sorted = any(
+        s in user_intent.lower() for s in ["cheapest", "most affordable", "más barato", "mas economico", "price_asc", "price_desc"]
+    )
+
+    if is_price_sorted:
+        logger.info(f"Results are already price-sorted. Returning top {top_n} candidates.")
         return candidates[:top_n]
 
-    formatted = [_prepare_candidate(c) for c in candidates[:12]]
-    payload = json.dumps({"intent": user_intent, "products": formatted}, ensure_ascii=False)
-    messages = [
-        {"role": "system", "content": _RANK_PROMPT},
-        {"role": "user", "content": payload},
-    ]
+    # --- NEW: Low-Mid-High Price Spread Logic for initial/relevance searches ---
+    logger.info(f"Applying low-mid-high price spread ranking for initial relevance search.")
+    if len(candidates) < 3:
+        # Not enough candidates for a spread, just return them sorted by price.
+        return sorted(candidates, key=lambda p: p.get("price") or 0.0)
 
-    try:
-        resp = _llm_client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=0,
-            max_tokens=128,
-        )
-        content = resp.choices[0].message.content if resp.choices else "{}"
-        data = json.loads(content)
-        ordered = data.get("ordered_skus", [])
-    except Exception as exc:  # pragma: no cover - network issues etc.
-        logger.exception("LLM ranking failed: %s", exc)
-        return candidates[:top_n]
+    # Sort candidates by price to easily find cheapest, mid, and most expensive
+    sorted_by_price = sorted(candidates, key=lambda p: p.get("price") or 0.0)
 
-    sku_map = {p.get("item_code"): p for p in candidates}
+    cheapest = sorted_by_price[0]
+    most_expensive = sorted_by_price[-1]
+    
+    # Find the middle product. Avoid picking the same as cheapest or most expensive if possible.
+    mid_index = len(sorted_by_price) // 2
+    middle = sorted_by_price[mid_index]
+
+    # Assemble the final list, ensuring no duplicates and respecting top_n
     ranked: List[Dict[str, Any]] = []
-    for sku in ordered:
-        if sku in sku_map:
-            ranked.append(sku_map.pop(sku))
-    ranked.extend(list(sku_map.values()))
+    seen_model_names = set()
+
+    for product in [cheapest, middle, most_expensive]:
+        base_model = product.get("base_model_name")
+        if base_model not in seen_model_names:
+            ranked.append(product)
+            seen_model_names.add(base_model)
+
+    # Ensure the final list is sorted by price for presentation
+    ranked.sort(key=lambda p: p.get("price") or 0.0)
+
     return ranked[:top_n]
 
 
@@ -85,6 +97,8 @@ def get_ranked_products(intent: Dict[str, Any], city: str, top_n: int = 3) -> Li
     if not query:
         return []
 
+    sort_by_param = intent.get("sort_by", "relevance")
+
     warehouses = conversation_location.get_warehouses_for_city(city) if city else None
     results = product_service.search_local_products(
         query_text=query,
@@ -93,9 +107,10 @@ def get_ranked_products(intent: Dict[str, Any], city: str, top_n: int = 3) -> Li
         warehouse_names=warehouses,
         min_price=intent.get("budget_min"),
         max_price=intent.get("budget_max"),
-        sort_by=intent.get("sort_by"),
+        sort_by=sort_by_param,
     )
     if not results:
         return []
-
+    
+    # Pass the original user intent text to the ranker to check for price-related keywords
     return rank_products(query, results, top_n=top_n)
