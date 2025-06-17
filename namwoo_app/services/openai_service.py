@@ -727,6 +727,20 @@ def process_new_message(
         return
 
     system_prompt_content = Config.SYSTEM_PROMPT
+    
+    # --- CONTEXT INJECTION FIX ---
+    # Check for a saved location and inject it into the system prompt.
+    saved_city = conversation_location.get_conversation_city(sb_conversation_id)
+    if saved_city:
+        contextual_note = (
+            f"\n\n**NOTA DE CONTEXTO CRÍTICA:** La ubicación del usuario ha sido confirmada como **{saved_city}**. "
+            "DEBES usar esta ubicación para todas las búsquedas de productos y no debes volver a preguntar por la ciudad, "
+            "a menos que el usuario mencione explícitamente una nueva."
+        )
+        system_prompt_content += contextual_note
+        logger.info(f"Injected location context '{saved_city}' into system prompt for conv {sb_conversation_id}.")
+    # --- END CONTEXT INJECTION FIX ---
+
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt_content}] + openai_history
 
     max_hist_current = getattr(Config, "MAX_HISTORY_MESSAGES", MAX_HISTORY_MESSAGES)
@@ -809,7 +823,7 @@ def process_new_message(
 
                         if is_list_request:
                             logger.info(f"List format requested based on user message: '{triggering_user_message_content}'")
-                            formatted_response = product_utils.format_model_list_with_colors(candidate_products)
+                            formatted_response = product_utils.format_model_list_with_colors(candidate_products, triggering_user_message_content)
                         else:
                             logger.info(f"Recommendation format requested. Invoking AI Sales-Associate.")
                             ranked_products = product_recommender.rank_products(query_text, candidate_products)

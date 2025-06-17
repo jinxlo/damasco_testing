@@ -28,6 +28,9 @@ if getattr(Config, "OPENAI_API_KEY", None):
 
 logger = logging.getLogger(__name__)
 
+# This constant is now defined here so it's available to functions in this module
+KNOWN_BRANDS = {'SAMSUNG', 'TECNO', 'XIAOMI', 'INFINIX', 'DAMASCO'}
+
 def user_is_asking_for_cheapest(message: str) -> bool:
     """Return True if the user clearly wants the cheapest option."""
     if not message:
@@ -221,10 +224,8 @@ def format_ai_recommendations(products: List[Dict]) -> str:
     if not products:
         return "Lo siento, no pude encontrar una recomendación adecuada en este momento. ¿Podrías intentar con otra búsqueda?"
 
-    # The recommender already gives us ungrouped products, so we group them for formatting.
     grouped_products = group_products_by_model(products)
     
-    # Create a mapping from base_model_name to the enriched data (like recommendation reason)
     recommendation_reasons = {}
     for prod in products:
         base_name = get_base_model_name(prod.get("item_name", ""))
@@ -256,7 +257,6 @@ def format_ai_recommendations(products: List[Dict]) -> str:
             f"✨ *Características destacadas:* {features_str}"
         )
         
-        # Add the AI's reason for recommending this model
         reason = recommendation_reasons.get(model_name)
         if reason:
             response_parts.append(f"⭐ *Por qué te lo recomiendo:* {reason}")
@@ -292,7 +292,7 @@ def format_product_response(grouped_product: Dict, user_query: Optional[str] = N
     colors = grouped_product.get("available_colors") or grouped_product.get("colors", [])
     colors_str = ", ".join(colors) if colors else "No especificado"
 
-    description = _get_llm_formatted_specs(grouped_product) # Use the new smart formatter
+    description = _get_llm_formatted_specs(grouped_product)
 
     stores = grouped_product.get("available_in_stores") or ([] if grouped_product.get("store") is None else [grouped_product.get("store")])
     stores_str = f"Disponible en {', '.join(stores)}." if stores else ""
@@ -309,19 +309,19 @@ def format_product_response(grouped_product: Dict, user_query: Optional[str] = N
 
     return "\n".join(card_lines).strip()
 
-def format_model_list_with_colors(products: List[Dict]) -> str:
-    """Formats a list of models with their available colors."""
+def format_model_list_with_colors(products: List[Dict], user_query: str) -> str:
+    """Formats a list of models with their available colors, strictly filtering by brand if mentioned."""
     if not products:
         return "No encontré modelos que coincidan con tu búsqueda en este momento."
 
-    # Filter out products of non-requested brands if a brand is specified
+    # --- BUG FIX: Add brand filtering to the list formatter ---
     detected_brands = {brand for brand in KNOWN_BRANDS if brand.lower() in user_query.lower()}
     if detected_brands:
         products = [p for p in products if p.get('brand', '').upper() in detected_brands]
 
     grouped = group_products_by_model(products)
     if not grouped:
-        return "No encontré modelos que coincidan con tu búsqueda en este momento."
+        return "No encontré modelos de esa marca que coincidan con tu búsqueda."
 
     lines = ["¡Claro! Aquí tienes los modelos disponibles:\n"]
     for product in grouped:

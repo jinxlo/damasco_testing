@@ -90,7 +90,7 @@ def search_local_products(
         log_message_parts.append(f"min_price={min_price}")
     if max_price is not None:
         log_message_parts.append(f"max_price={max_price}")
-
+        
     logger.info(", ".join(log_message_parts))
 
     embedding_model = (Config.OPENAI_EMBEDDING_MODEL if hasattr(Config, "OPENAI_EMBEDDING_MODEL") else "text-embedding-3-small")
