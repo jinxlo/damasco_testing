@@ -5,6 +5,7 @@ import json
 import time # Keep time if used by retry logic within embedding_utils
 import os # For constructing file paths
 from typing import List, Dict, Optional, Tuple, Union, Any
+from decimal import Decimal
 from openai import OpenAI, APIError, RateLimitError, APITimeoutError, BadRequestError
 from flask import current_app # For accessing app config like OPENAI_EMBEDDING_MODEL
 
@@ -772,7 +773,6 @@ def process_new_message(
                     elif fn_name == "search_local_products":
                         query_text = args.get("query_text", "")
                         
-                        # ENFORCE LOCATION CONTEXT
                         if 'warehouse_names' not in args or not args['warehouse_names']:
                             logger.info("LLM did not provide warehouse_names. Checking for saved location context...")
                             user_city = conversation_location.get_conversation_city(sb_conversation_id)
@@ -785,26 +785,20 @@ def process_new_message(
                         if "warehouse_names" in args and args["warehouse_names"]:
                             args["warehouse_names"] = [canonicalize_whs_name(n) for n in args["warehouse_names"]]
                         
-                        # Re-introduce spec extraction and pass it to the search function
                         required_specs = _extract_specs_from_query(query_text)
                         args['required_specs'] = required_specs
                         args['exclude_skus'] = previously_shown_skus
                         
                         candidate_products = product_service.search_local_products(**args)
                         
-                        # --- CORRECTED FORMATTING LOGIC ---
-                        # Find the user message that most likely triggered this search chain.
                         triggering_user_message_content = ""
-                        # Split the LLM's query to find the original user message.
                         query_keywords = set(query_text.lower().split())
                         for msg in reversed(messages):
                             if msg.get("role") == "user":
                                 msg_content = msg.get("content", "").lower()
-                                # Check if the user message seems related to the query.
                                 if any(kw in msg_content for kw in query_keywords):
                                     triggering_user_message_content = msg.get("content", "")
                                     break
-                        # If no related message is found, fall back to the last user message.
                         if not triggering_user_message_content:
                             for msg in reversed(messages):
                                 if msg.get("role") == "user":
@@ -817,9 +811,9 @@ def process_new_message(
                             logger.info(f"List format requested based on user message: '{triggering_user_message_content}'")
                             formatted_response = product_utils.format_model_list_with_colors(candidate_products)
                         else:
-                            logger.info(f"Recommendation format requested based on user message: '{triggering_user_message_content}'")
-                            ranked_grouped_products = product_recommender.rank_products(query_text, candidate_products)
-                            formatted_response = product_utils.format_multiple_products_response(ranked_grouped_products, query_text)
+                            logger.info(f"Recommendation format requested. Invoking AI Sales-Associate.")
+                            ranked_products = product_recommender.rank_products(query_text, candidate_products)
+                            formatted_response = product_utils.format_ai_recommendations(ranked_products)
                         
                         output_content_str = json.dumps({"status": "success" if candidate_products else "not_found", "formatted_response": formatted_response}, ensure_ascii=False)
                         

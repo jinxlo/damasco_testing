@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from typing import List, Dict, Any, Optional
+from decimal import Decimal
 
 from openai import OpenAI
 
@@ -17,102 +18,129 @@ try:
     from ..utils import conversation_location
 except Exception:  # pragma: no cover - allow missing deps in tests
     conversation_location = None
+try: # Optional import for testing environments
+    from ..utils import product_utils
+except Exception: # pragma: no cover - allow missing deps in tests
+    product_utils = None
+
 
 logger = logging.getLogger(__name__)
 
 _llm_client: Optional[OpenAI] = None
 if getattr(Config, "OPENAI_API_KEY", None):
     try:
-        _llm_client = OpenAI(api_key=Config.OPENAI_API_KEY, timeout=5.0)
+        _llm_client = OpenAI(api_key=Config.OPENAI_API_KEY, timeout=10.0)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to init OpenAI client: %s", exc)
         _llm_client = None
 
-_RANK_PROMPT = (
-    "Eres un asesor de ventas senior en una tienda de electronicos. "
-    "Debes ordenar los productos proporcionados del mejor al peor para la peticion del cliente. "
-    "Responde SOLO con JSON en el formato {\"ordered_skus\": [\"SKU1\", ...]}."
+# New, more sophisticated prompt for the AI Sales-Associate
+_SALES_ASSOCIATE_PROMPT = (
+    "Eres un experto asesor de ventas de tecnología para la tienda Damasco. "
+    "Tu tarea es analizar la consulta de un cliente y la siguiente lista de productos disponibles (en formato JSON). "
+    "Selecciona los 3 MEJORES productos que respondan a la necesidad del cliente. "
+    "Para cada producto seleccionado, escribe una recomendación breve y persuasiva (máximo 15 palabras) en la clave 'reason_for_recommendation'. "
+    "Esta razón debe ser útil y relevante para un cliente, como 'Ideal para juegos por su procesador' o 'La mejor cámara en este rango de precio'.\n\n"
+    "Considera un balance entre precio, características y relevancia para la consulta del cliente. "
+    "No te limites a los más caros o los más baratos. Piensa como un verdadero vendedor ayudando a un cliente a decidir.\n\n"
+    "Responde ÚNICAMENTE con un objeto JSON válido que contenga una clave 'recommendations'. "
+    "El valor debe ser una lista de hasta 3 objetos, cada uno con las claves 'sku' y 'reason_for_recommendation'.\n"
+    "Ejemplo de respuesta:\n"
+    "{\n"
+    "  \"recommendations\": [\n"
+    "    {\"sku\": \"D0001234\", \"reason_for_recommendation\": \"Excelente balance entre precio y rendimiento para el día a día.\"},\n"
+    "    {\"sku\": \"D0005678\", \"reason_for_recommendation\": \"La mejor opción si tu prioridad es la fotografía profesional.\"},\n"
+    "    {\"sku\": \"D0009012\", \"reason_for_recommendation\": \"Perfecto para juegos y multimedia por su pantalla y procesador.\"}\n"
+    "  ]\n"
+    "}"
 )
 
 
 def _prepare_candidate(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Prepares a candidate product dictionary for the LLM, ensuring JSON-serializable types."""
+    price = item.get("price")
     return {
         "sku": item.get("item_code"),
         "name": item.get("item_name"),
         "brand": item.get("brand"),
-        "price": item.get("price"),
+        "price": float(price) if isinstance(price, Decimal) else price,
         "specs": item.get("especificacion") or item.get("specifitacion"),
-        "desc": item.get("llm_formatted_description") or item.get("description"),
+        "desc": item.get("llm_summarized_description") or item.get("description"),
     }
 
 
 def rank_products(user_intent: str, candidates: List[Dict[str, Any]], top_n: int = 3) -> List[Dict[str, Any]]:
     """
-    Intelligently ranks and selects products.
-    - For initial relevance-based searches, it provides a low-mid-high price spread.
-    - For explicit price-sorted searches (e.g., "cheapest"), it respects that order.
+    Intelligently ranks and selects products using an LLM sales associate persona.
+    Falls back to simpler logic if LLM ranking fails.
     """
     if not candidates:
         return []
 
-    # If configured for LLM ranking and a client is available, try that first
     if getattr(Config, "RECOMMENDER_MODE", "llm") == "llm" and _llm_client is not None:
         try:
-            cand_payload = json.dumps([_prepare_candidate(c) for c in candidates], ensure_ascii=False)
-            user_prompt = f"{cand_payload}\nUsuario: {user_intent}"
+            prepared_candidates = [_prepare_candidate(c) for c in candidates]
+            cand_payload = json.dumps(prepared_candidates, ensure_ascii=False)
+            user_prompt = f"Lista de Productos:\n{cand_payload}\n\nConsulta del Cliente:\n'{user_intent}'"
+
             response = _llm_client.chat.completions.create(
                 model=getattr(Config, "RECOMMENDER_LLM_MODEL", "gpt-4o-mini"),
-                messages=[{"role": "system", "content": _RANK_PROMPT}, {"role": "user", "content": user_prompt}],
-                temperature=0.0,
-                max_tokens=100,
+                messages=[{"role": "system", "content": _SALES_ASSOCIATE_PROMPT}, {"role": "user", "content": user_prompt}],
+                temperature=0.1,
+                max_tokens=400, # Increased to allow for reasons
+                response_format={"type": "json_object"},
             )
-            ordered = json.loads(response.choices[0].message.content).get("ordered_skus", [])
-            ranked = [next((c for c in candidates if c.get("item_code") == sku), None) for sku in ordered]
-            ranked = [r for r in ranked if r]
-            if ranked:
-                return ranked[:top_n]
-        except Exception as exc:  # pragma: no cover - be resilient during tests
-            logger.warning("LLM ranking failed: %s", exc)
+            content = response.choices[0].message.content
+            recommendations = json.loads(content).get("recommendations", [])
 
-    # Check if the results are already sorted by price from the search_local_products call
-    # This happens when the user asks for "cheapest" or "most expensive".
+            enriched_candidates = []
+            # Use the LLM's ordering and enrichment
+            for rec in recommendations:
+                sku = rec.get("sku")
+                product = next((c for c in candidates if c.get("item_code") == sku), None)
+                if product:
+                    product['reason_for_recommendation'] = rec.get('reason_for_recommendation', 'Una excelente opción.')
+                    enriched_candidates.append(product)
+
+            if enriched_candidates:
+                logger.info(f"LLM Sales-Associate successfully recommended {len(enriched_candidates)} products.")
+                return enriched_candidates[:top_n]
+
+        except Exception as exc:
+            logger.warning(f"Smarter LLM ranking failed: {exc}. Falling back to simpler method.")
+            # Fall through to the simpler ranking logic below
+
+    # --- FALLBACK LOGIC ---
     is_price_sorted = any(
         s in user_intent.lower() for s in ["cheapest", "most affordable", "más barato", "mas economico", "price_asc", "price_desc"]
     )
-
     if is_price_sorted:
-        logger.info(f"Results are already price-sorted. Returning top {top_n} candidates.")
+        logger.info(f"Fallback: Results are already price-sorted. Returning top {top_n} candidates.")
         return candidates[:top_n]
 
-    # --- NEW: Low-Mid-High Price Spread Logic for initial/relevance searches ---
-    logger.info(f"Applying low-mid-high price spread ranking for initial relevance search.")
+    logger.info(f"Fallback: Applying low-mid-high price spread ranking.")
     if len(candidates) < 3:
-        # Not enough candidates for a spread, just return them sorted by price.
         return sorted(candidates, key=lambda p: p.get("price") or 0.0)
 
-    # Sort candidates by price to easily find cheapest, mid, and most expensive
     sorted_by_price = sorted(candidates, key=lambda p: p.get("price") or 0.0)
-
     cheapest = sorted_by_price[0]
     most_expensive = sorted_by_price[-1]
-    
-    # Find the middle product. Avoid picking the same as cheapest or most expensive if possible.
     mid_index = len(sorted_by_price) // 2
     middle = sorted_by_price[mid_index]
 
-    # Assemble the final list, ensuring no duplicates and respecting top_n
     ranked: List[Dict[str, Any]] = []
     seen_model_names = set()
+    
+    # Use the now-robust utility to get the base model name for deduplication
+    get_base_name = getattr(product_utils, 'get_base_model_name', lambda name: name)
 
     for product in [cheapest, middle, most_expensive]:
-        base_model = product.get("base_model_name")
+        base_model = get_base_name(product.get("item_name", ""))
         if base_model not in seen_model_names:
             ranked.append(product)
             seen_model_names.add(base_model)
 
-    # Ensure the final list is sorted by price for presentation
     ranked.sort(key=lambda p: p.get("price") or 0.0)
-
     return ranked[:top_n]
 
 
@@ -145,5 +173,4 @@ def get_ranked_products(intent: Dict[str, Any], city: str, top_n: int = 3) -> Li
     if not results:
         return []
     
-    # Pass the original user intent text to the ranker to check for price-related keywords
     return rank_products(query, results, top_n=top_n)

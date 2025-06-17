@@ -1,9 +1,12 @@
 # namwoo_app/utils/product_utils.py
 import re
+import logging
 from typing import Optional, Any, List, Dict
 from collections import defaultdict
 import locale
 from decimal import Decimal
+from openai import OpenAI
+from ..config import Config
 
 # Set locale for currency formatting if not already set
 try:
@@ -12,9 +15,19 @@ except locale.Error:
     try:
         locale.setlocale(locale.LC_ALL, 'es_ES.UTF-8')
     except locale.Error:
-        locale.setlocale(locale.LC_ALL, '') # Fallback to system default
+        locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
 
-# --- NEW: Moved from openai_service.py to break circular import ---
+
+# Initialize a local client for this module if needed
+_llm_formatter_client: Optional[OpenAI] = None
+if getattr(Config, "OPENAI_API_KEY", None):
+    try:
+        _llm_formatter_client = OpenAI(api_key=Config.OPENAI_API_KEY, timeout=10.0)
+    except Exception as exc:
+        _llm_formatter_client = None
+
+logger = logging.getLogger(__name__)
+
 def user_is_asking_for_cheapest(message: str) -> bool:
     """Return True if the user clearly wants the cheapest option."""
     if not message:
@@ -42,7 +55,6 @@ def user_is_asking_for_list(message: str) -> bool:
     import unicodedata
     normalized = unicodedata.normalize("NFKD", message).encode("ascii", "ignore").decode().lower()
     return any(kw in normalized for kw in LIST_KEYWORDS)
-# --- END NEW ---
 
 def _normalize_string_for_id_part(value: Any) -> Optional[str]:
     if value is None:
@@ -66,41 +78,42 @@ def generate_product_location_id(item_code_raw: Any, whs_name_raw: Any) -> Optio
 
 # --- Robust helper functions for grouping and formatting ---
 
-# CORRECTED REGEX: More specific to avoid removing parts of the model name like 'C' from 'SPARK 30C'
-BASE_MODEL_CLEANUP_PAT = re.compile(
-    r'\s*\+\s*OBSEQUIO|\(CON OBSEQUIO\)|'  # Match "+ OBSEQUIO" or "(CON OBSEQUIO)"
-    r'\s+5G(?=\s|$)|'  # Match " 5G " only if followed by space or end of line
-    r'\s+(NEGRO|BLANCO|AZUL|VERDE|ROJO|GRIS|DORADO|PLATEADO|PURPURA|MORADO|AMARILLO|NARANJA|PLATA|GRAFITO|ROSADO|PERLADO)$',  # Match color at the end of the string
-    flags=re.IGNORECASE
-)
-
-COLOR_EXTRACT_PAT = re.compile(
-    r'\b(NEGRO|BLANCO|AZUL|VERDE|ROJO|GRIS|DORADO|PLATEADO|PURPURA|MORADO|AMARILLO|NARANJA|PLATA|GRAFITO|ROSADO|PERLADO)$',
-    flags=re.IGNORECASE
-)
-
+KNOWN_COLORS = {
+    'NEGRO', 'BLANCO', 'AZUL', 'VERDE', 'ROJO', 'GRIS', 'DORADO', 'PLATEADO',
+    'PURPURA', 'MORADO', 'AMARILLO', 'NARANJA', 'PLATA', 'GRAFITO', 'ROSADO', 'PERLADO'
+}
+WORDS_TO_REMOVE = {'5G', 'OBSEQUIO', '+', 'CON'}
 
 def get_base_model_name(item_name: str) -> str:
-    """Strips known suffixes and colors to find a base model name for grouping."""
+    """
+    Robustly strips colors, specs, and junk words to find a base model name.
+    This is more reliable than a single complex regex.
+    """
     if not item_name:
         return "Producto Desconocido"
-    # The new regex is more precise and a loop is less necessary, but kept for safety.
-    base_name = item_name.strip()
-    for _ in range(3): # Reduced loop count
-        new_name = BASE_MODEL_CLEANUP_PAT.sub('', base_name).strip()
-        if new_name == base_name:
-            break
-        base_name = new_name
+
+    words = item_name.upper().split()
+    # Filter out colors, junk words, and pure specifiers like '256+8'
+    base_words = [
+        word for word in words if
+        word not in KNOWN_COLORS and
+        word not in WORDS_TO_REMOVE and
+        not re.fullmatch(r'\d+\+\d+', word) and
+        not re.fullmatch(r'\d+GB', word)
+    ]
+
+    base_name = ' '.join(base_words).strip()
     return base_name if base_name else item_name
 
-
 def _extract_color_from_name(item_name: str) -> Optional[str]:
-    """Extracts a color from the end of a product name string."""
+    """Extracts a color from the product name string by checking against a known set."""
     if not item_name:
         return None
-    match = COLOR_EXTRACT_PAT.search(item_name.upper())
-    return match.group(1).capitalize() if match else None
-
+    words = item_name.upper().split()
+    for word in reversed(words):
+        if word in KNOWN_COLORS:
+            return word.capitalize()
+    return None
 
 def extract_color_from_name(item_name: str) -> tuple[Optional[str], str]:
     """Return the extracted color and base model name."""
@@ -130,29 +143,22 @@ def group_products_by_model(products: List[Dict]) -> List[Dict]:
 
     result = []
     for base_model, variants in grouped.items():
-        # Choose the variant with the lowest price as the representative
         representative_product = min(variants, key=lambda p: p.get('price', float('inf')))
         
-        # Aggregate all unique colors and store locations from all variants of this model
         all_colors = set()
         all_stores = set()
         for variant in variants:
-            color = _extract_color_from_name(
-                variant.get("item_name") or variant.get("itemName", "")
-            )
+            color = _extract_color_from_name(variant.get("item_name") or variant.get("itemName", ""))
             if color:
                 all_colors.add(color)
             branch = variant.get("branch_name")
             if branch:
                 all_stores.add(branch)
         
-        # Build the final grouped product dictionary using data from the representative,
-        # but overriding with the aggregated color and store lists.
         final_product = dict(representative_product)
-        final_product['base_model_name'] = base_model  # Use the cleaned base name for display
+        final_product['base_model_name'] = base_model
         final_product['available_colors'] = sorted(list(all_colors))
         final_product['available_in_stores'] = sorted(list(all_stores))
-        # Backwards compatibility keys
         final_product['model'] = base_model
         final_product['colors'] = final_product['available_colors']
         final_product['store'] = ", ".join(final_product['available_in_stores']) if final_product['available_in_stores'] else None
@@ -160,59 +166,140 @@ def group_products_by_model(products: List[Dict]) -> List[Dict]:
         
     return result
 
-
-def _get_key_specs(product: Dict, user_query: Optional[str] = None) -> str:
-    """Return a short description of key specs for a product."""
-
-    MAX_LEN = 200
-
-    # Prioritize the structured `especificacion` field (and common typo)
+def _get_best_available_specs_text(product: Dict) -> str:
+    """Gets the best available raw text for specs, prioritizing structured data."""
     spec_str = product.get("especificacion") or product.get("specifitacion")
-    if spec_str:
-        first_line = spec_str.strip().splitlines()[0]
-        clean = " ".join(first_line.split())
-        return clean[:MAX_LEN].rstrip()
+    if spec_str and isinstance(spec_str, str) and ":" in spec_str and len(spec_str.splitlines()) > 1:
+        logger.debug(f"Using structured 'especificacion' field for product {product.get('item_name')}")
+        return spec_str.strip()
 
-    # Fallback to the LLM summary
-    summary = (
+    logger.debug(f"Falling back to description for product {product.get('item_name')}")
+    return (
         product.get("llm_summarized_description")
         or product.get("description")
         or "Descripción no disponible."
     ).strip()
-    if not summary:
-        return ""
-    first_sentence = summary.split(".")[0].strip()
-    if first_sentence:
-        first_sentence += "." if summary.startswith(first_sentence) and summary[len(first_sentence):].lstrip().startswith(".") else ""
-    clean_sum = " ".join(first_sentence.split())
-    return clean_sum[:MAX_LEN].rstrip()
 
+def _get_llm_formatted_specs(product: Dict) -> str:
+    """Uses an LLM to generate a professional, single-line summary of the top 4 specs."""
+    global _llm_formatter_client
+    if not _llm_formatter_client:
+        logger.warning("LLM formatter client not available. Falling back to raw specs.")
+        return "Detalles adicionales no disponibles."
+    
+    raw_spec_text = _get_best_available_specs_text(product)
+    
+    if "no disponible" in raw_spec_text.lower():
+        return raw_spec_text
+
+    system_prompt = (
+        "Eres un redactor de marketing para una tienda de tecnología. Tu única tarea es tomar las especificaciones de un producto y reescribirlas como una sola frase atractiva y fácil de leer. "
+        "Extrae las 4 características más importantes (como pantalla, procesador, cámara, almacenamiento, batería) y combínalas en una oración natural y fluida. "
+        "Ejemplo: Si recibes 'Pantalla: 6.78\" FHD+, 120Hz\\nMemoria: 256GB\\nCámara: 108MP\\nBatería: 5000mAh', "
+        "responde: 'Gran pantalla FHD+ de 6.78\" a 120Hz, 256GB de almacenamiento, cámara de 108MP y una potente batería de 5000mAh.' "
+        "No añadas introducciones ni despedidas. Solo devuelve la frase."
+    )
+    
+    try:
+        completion = _llm_formatter_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": raw_spec_text}
+            ],
+            temperature=0.2,
+            max_tokens=100,
+        )
+        formatted_specs = completion.choices[0].message.content.strip()
+        return formatted_specs if formatted_specs else "Características destacadas no disponibles."
+    except Exception as e:
+        logger.error(f"Error getting LLM-formatted specs for {product.get('item_name')}: {e}")
+        return (product.get("especificacion") or product.get("specifitacion") or "Detalles no disponibles.").splitlines()[0]
+
+def format_ai_recommendations(products: List[Dict]) -> str:
+    """Formats the output from the AI Sales-Associate recommender with the new professional format."""
+    if not products:
+        return "Lo siento, no pude encontrar una recomendación adecuada en este momento. ¿Podrías intentar con otra búsqueda?"
+
+    # The recommender already gives us ungrouped products, so we group them for formatting.
+    grouped_products = group_products_by_model(products)
+    
+    # Create a mapping from base_model_name to the enriched data (like recommendation reason)
+    recommendation_reasons = {}
+    for prod in products:
+        base_name = get_base_model_name(prod.get("item_name", ""))
+        if 'reason_for_recommendation' in prod:
+            recommendation_reasons[base_name] = prod['reason_for_recommendation']
+
+    response_parts = ["¡Claro! Basado en tu búsqueda, aquí tienes mis mejores recomendaciones para ti:"]
+
+    for product in grouped_products:
+        model_name = product.get("base_model_name")
+        
+        price_usd = product.get("price")
+        price_bs = product.get("price_bolivar")
+        
+        price_usd_str = f"${price_usd:,.2f}" if isinstance(price_usd, (int, float, Decimal)) else "Precio no disponible"
+        price_bs_str = f"Bs. {locale.format_string('%.2f', price_bs, grouping=True)}" if isinstance(price_bs, (int, float, Decimal)) else ""
+        full_price_str = f"{price_usd_str} ({price_bs_str})" if price_bs_str else price_usd_str
+
+        colors = product.get("available_colors", [])
+        colors_str = ", ".join(colors) if colors else "No especificado"
+
+        features_str = _get_llm_formatted_specs(product)
+        
+        response_parts.append(
+            f"\n\n---\n\n"
+            f"📱 ***{model_name.strip()}***\n"
+            f"💵 *Precio:* {full_price_str}\n"
+            f"🎨 *Colores disponibles:* {colors_str}\n"
+            f"✨ *Características destacadas:* {features_str}"
+        )
+        
+        # Add the AI's reason for recommending this model
+        reason = recommendation_reasons.get(model_name)
+        if reason:
+            response_parts.append(f"⭐ *Por qué te lo recomiendo:* {reason}")
+
+    response_parts.append("\n\n¿Te gustaría saber más detalles de alguno de estos modelos? 😊")
+    return "".join(response_parts)
+
+def format_multiple_products_response(products: List[Dict], user_query: Optional[str] = None) -> str:
+    """Formats a list of grouped products into a single, multi-card response string."""
+    if not products:
+        return ""
+        
+    grouped_products = group_products_by_model(products)
+    product_cards = [format_product_response(p, user_query) for p in grouped_products[:3]]
+    
+    response = "¡Claro! Aquí tienes algunas opciones excelentes para ti:\n\n"
+    response += "\n\n---\n\n".join(product_cards)
+    response += "\n\n¿Quieres que verifiquemos uno de estos para ti o deseas ver más opciones? 😊"
+    
+    return response
 
 def format_product_response(grouped_product: Dict, user_query: Optional[str] = None) -> str:
     """Formats a single grouped product into the desired 'Product Card' string."""
-    # Use either the new or legacy key for the model name
     model = grouped_product.get("base_model_name") or grouped_product.get("model", "Producto")
     
     price_usd = grouped_product.get("price")
     price_bs = grouped_product.get("price_bolivar") or grouped_product.get("priceBolivar")
     
     price_usd_str = f"${price_usd:,.2f}" if isinstance(price_usd, (int, float, Decimal)) else "Precio no disponible"
-    # Format Bolivares with space as thousand separator and comma as decimal
-    price_bs_str = f"Bs. {price_bs:,.2f}" if isinstance(price_bs, (int, float, Decimal)) else ""
+    price_bs_str = f"Bs. {locale.format_string('%.2f', price_bs, grouping=True)}" if isinstance(price_bs, (int, float, Decimal)) else ""
+    full_price_str = f"{price_usd_str} ({price_bs_str})" if price_bs_str else price_usd_str
 
-    # Use the aggregated list of all available colors.
     colors = grouped_product.get("available_colors") or grouped_product.get("colors", [])
     colors_str = ", ".join(colors) if colors else "No especificado"
 
-    description = _get_key_specs(grouped_product, user_query)
+    description = _get_llm_formatted_specs(grouped_product) # Use the new smart formatter
 
-    # Use the aggregated list of all available stores.
     stores = grouped_product.get("available_in_stores") or ([] if grouped_product.get("store") is None else [grouped_product.get("store")])
     stores_str = f"Disponible en {', '.join(stores)}." if stores else ""
     
     card_lines = [
         f"📱 *{model.strip()}*",
-        f"💵 *Precio:* {price_usd_str} ({price_bs_str})",
+        f"💵 *Precio:* {full_price_str}",
         f"🎨 *Colores disponibles:* {colors_str}",
         f"✨ *Características destacadas:* {description}",
     ]
@@ -222,54 +309,15 @@ def format_product_response(grouped_product: Dict, user_query: Optional[str] = N
 
     return "\n".join(card_lines).strip()
 
-
-def format_multiple_products_response(products: List[Dict], user_query: Optional[str] = None) -> str:
-    """Formats a list of grouped products into a single, multi-card response string."""
-    if not products:
-        return ""
-        
-    product_cards = [format_product_response(p, user_query) for p in products[:3]]
-    
-    response = "¡Claro! Aquí tienes algunas opciones excelentes para ti:\n\n"
-    response += "\n\n---\n\n".join(product_cards)
-    response += "\n\n¿Quieres que verifiquemos uno de estos para ti o deseas ver más opciones? 😊"
-    
-    return response
-
-
-def format_product_list_response(products: List[Dict]) -> str:
-    """Formats a list of grouped products into a simple bulleted list."""
-    if not products:
-        return "No encontré modelos que coincidan con tu búsqueda en este momento."
-
-    # Sort by price ascending for the list view
-    sorted_products = sorted(products, key=lambda p: p.get("price") or float('inf'))
-    
-    lines = ["¡Claro! Aquí tienes una lista de los modelos que encontré:\n"]
-    seen_models = set()
-    for product in sorted_products:
-        # Use the base_model_name for de-duplication to show each unique model only once.
-        model_name = product.get("base_model_name", "Producto Desconocido").strip()
-        if model_name in seen_models:
-            continue
-        seen_models.add(model_name)
-        
-        price = product.get("price")
-        price_str = f"${price:,.2f}" if isinstance(price, (int, float, Decimal)) else "Precio no disponible"
-        lines.append(f"🔹 {model_name} - {price_str}")
-    
-    # Check if any models were actually added to the list after de-duplication
-    if len(seen_models) == 0:
-        return "No encontré modelos que coincidan con tu búsqueda en este momento."
-
-    lines.append("\n¿Te gustaría ver más detalles de alguno de estos modelos?")
-    return "\n".join(lines)
-
-
 def format_model_list_with_colors(products: List[Dict]) -> str:
     """Formats a list of models with their available colors."""
     if not products:
         return "No encontré modelos que coincidan con tu búsqueda en este momento."
+
+    # Filter out products of non-requested brands if a brand is specified
+    detected_brands = {brand for brand in KNOWN_BRANDS if brand.lower() in user_query.lower()}
+    if detected_brands:
+        products = [p for p in products if p.get('brand', '').upper() in detected_brands]
 
     grouped = group_products_by_model(products)
     if not grouped:

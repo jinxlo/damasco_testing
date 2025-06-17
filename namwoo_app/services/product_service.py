@@ -8,7 +8,7 @@ from decimal import InvalidOperation as InvalidDecimalOperation
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-from sqlalchemy import func, literal_column, distinct, or_
+from sqlalchemy import func, literal_column, distinct, or_, and_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -31,6 +31,8 @@ _MAIN_TYPE_PAT = re.compile(
     r"lavadora|secadora|freidora|microondas|horno)\b",
     flags=re.I,
 )
+# List of known brands for explicit filtering
+KNOWN_BRANDS = {'SAMSUNG', 'TECNO', 'XIAOMI', 'INFINIX', 'DAMASCO'}
 
 
 def _is_accessory(name: str) -> bool:
@@ -84,6 +86,10 @@ def search_local_products(
         log_message_parts.append(f"warehouses={warehouse_names}")
     if required_specs:
         log_message_parts.append(f"required_specs={required_specs}")
+    if min_price is not None:
+        log_message_parts.append(f"min_price={min_price}")
+    if max_price is not None:
+        log_message_parts.append(f"max_price={max_price}")
 
     logger.info(", ".join(log_message_parts))
 
@@ -98,7 +104,6 @@ def search_local_products(
             logger.error("DB session unavailable for search.")
             return None
         try:
-            # Stage 1: De-duplicated Primary Search for Unique Models.
             base_q = session.query(
                 Product,
                 Product.embedding.cosine_distance(query_emb).label("distance"),
@@ -118,6 +123,19 @@ def search_local_products(
                 base_q = base_q.filter(Product.sub_category.notilike('%ACCESORIO%'))
                 base_q = base_q.filter(Product.category.notilike('%ACCESORIO%'))
 
+            # --- BUG FIX: Add Brand and Price Filtering ---
+            detected_brands = [brand for brand in KNOWN_BRANDS if brand.lower() in query_text.lower()]
+            if detected_brands:
+                brand_clauses = [Product.brand.ilike(f'%{b}%') for b in detected_brands]
+                base_q = base_q.filter(or_(*brand_clauses))
+                logger.info(f"Applying strict brand filter for: {detected_brands}")
+
+            if min_price is not None:
+                base_q = base_q.filter(Product.price >= min_price)
+            if max_price is not None:
+                base_q = base_q.filter(Product.price <= max_price)
+            # --- END BUG FIX ---
+
             ranked_subquery = base_q.add_column(
                 func.row_number().over(
                     partition_by=Product.item_code,
@@ -134,15 +152,12 @@ def search_local_products(
             else:
                 unique_candidates_q = unique_candidates_q.order_by(ranked_subquery.c.distance.asc())
 
-            # Fetch more candidates than needed to allow for filtering
             candidate_rows = unique_candidates_q.limit(limit * 3).all()
             logger.info(f"Stage 1 Search: Found {len(candidate_rows)} unique semantic candidates.")
 
-            # Stage 2: Post-filtering and Enrichment
             if required_specs:
                 filtered_candidates = []
                 for row in candidate_rows:
-                    # CORRECTED: Expand authoritative text to include all relevant fields.
                     authoritative_text = f"{row.item_name or ''} {row.especificacion or ''} {row.description or ''}".lower()
                     
                     all_specs_met = True
@@ -150,14 +165,12 @@ def search_local_products(
                         spec_lower = spec.lower()
                         spec_nums = re.findall(r'\d+', spec_lower)
 
-                        # Purely textual requirement (e.g., 'amoled')
                         if not spec_nums:
                             if spec_lower not in authoritative_text:
                                 all_specs_met = False
                                 break
                             continue
 
-                        # Numeric requirement; treat memory specs with additional context
                         num_found_in_text = False
                         for num in spec_nums:
                             if any(token in spec_lower for token in ["gb", "ram", "memoria"]):
@@ -534,7 +547,7 @@ def get_color_variants(product_identifier: str) -> Optional[List[str]]:
         try:
             if is_sku:
                 logger.info(f"Identifier '{identifier}' treated as SKU. Finding variants based on its base model.")
-                base_code = product_utils.strip_color_suffix(identifier)
+                base_code = product_utils.get_base_model_name(identifier)
                 like_pattern = f"{base_code}%"
             else:
                 logger.info(f"Identifier '{identifier}' treated as model name. Finding variants via ILIKE.")
