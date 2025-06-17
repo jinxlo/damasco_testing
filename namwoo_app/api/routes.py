@@ -18,6 +18,8 @@ from ..services import support_board_service
 from ..services.support_board_service import (
     send_whatsapp_template_to_phone,
     route_conversation_to_sales,
+    recent_message_contains_checkout_template,
+    route_to_sales,
 )
 # Text utilities
 from ..utils.text_utils import split_full_name
@@ -265,6 +267,23 @@ def handle_support_board_webhook():
     logger.warning(f"Message in conv {sb_conversation_id_str} from unhandled sender {sender_user_id_str}. Assuming human intervention and pausing.")
     db_utils.pause_conversation_for_duration(sb_conversation_id_str, duration_seconds=pause_minutes * 60)
     return jsonify({"status": "ok", "message": "Unhandled sender type, bot paused"}), 200
+
+
+@api_bp.route('/webhook/incoming-message', methods=['POST'])
+def handle_incoming_message():
+    data = request.get_json(force=True)
+    user_id = data.get("user_id")
+    channel = data.get("channel")
+    message_text = data.get("message", "").strip().lower()
+
+    if channel == "whatsapp" and message_text == "sí":
+        if recent_message_contains_checkout_template(user_id):
+            route_to_sales(user_id)
+            return jsonify({"status": "routed_to_sales"}), 200
+        else:
+            return jsonify({"status": "template_not_detected"}), 200
+
+    return jsonify({"status": "no_action"}), 200
 
 
 # --- Health Check Endpoint (Keep as is) ---

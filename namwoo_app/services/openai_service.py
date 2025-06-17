@@ -7,7 +7,15 @@ import os # For constructing file paths
 from typing import List, Dict, Optional, Tuple, Union, Any
 from decimal import Decimal
 from openai import OpenAI, APIError, RateLimitError, APITimeoutError, BadRequestError
-from flask import current_app # For accessing app config like OPENAI_EMBEDDING_MODEL
+try:
+    from flask import current_app, g  # Access app config and request context when available
+except Exception:  # pragma: no cover - allow running without Flask app context
+    from flask import current_app
+
+    class _DummyG:
+        pass
+
+    g = _DummyG()
 
 # Import local services and utils
 from . import product_service
@@ -365,54 +373,42 @@ def _tool_send_whatsapp_order_summary_template(
     conversation_id: str,
     template_variables: list[str],
 ) -> Dict:
-    """Orchestrates sending a template directly, logging it, and routing."""
-    
-    logger.info(f"Orchestrating direct template send for conv {conversation_id}.")
-    
-    # Step 1: Send the template directly via Meta Cloud API
-    send_ok = support_board_service.send_whatsapp_template_direct(
-        user_id=customer_platform_user_id,
-        template_name="confirmacion_datos_cliente",
-        template_language="es_ES",
-        parameters=template_variables,
+    """Send checkout confirmation template using live pricing and context."""
+
+    # Prefer IDs from Flask context when available
+    context_customer = getattr(g, "customer_user_id", None)
+    context_conv = getattr(g, "conversation_id", None)
+    if context_customer:
+        customer_platform_user_id = context_customer
+    if context_conv:
+        conversation_id = context_conv
+
+    logger.info(
+        f"Orchestrating direct template send for conv {conversation_id} (user {customer_platform_user_id})."
     )
 
-    if not send_ok:
-        logger.error(f"Direct WhatsApp template send failed for conversation {conversation_id}.")
-        return {"status": "failed", "error": "API call to send template failed."}
+    # Inject live price based on SKU if present
+    product_sku = template_variables[0] if template_variables else None
+    get_details = getattr(product_service, "get_live_product_details", None)
+    if product_sku and callable(get_details):
+        details = get_details(product_sku)
+        if details and details.get("price") is not None:
+            template_variables[-1] = str(details["price"])
 
-    logger.info(f"Direct WhatsApp template send successful for conv {conversation_id}.")
-    
-    # Step 2: Log a confirmation message to the Support Board dashboard for agent visibility.
-    try:
-        # We need the phone number for the log message, _get_user_waid provides it without the country code prefix logic
-        waid = support_board_service._get_user_waid(customer_platform_user_id) or "ID: " + customer_platform_user_id
-        log_message = (
-            f"📝 Plantilla de WhatsApp 'confirmacion_datos_cliente' enviada a {waid}.\n\n"
-            f"Contenido:\n"
-            f"  - Cliente: {template_variables[0]} {template_variables[1]}\n"
-            f"  - Cédula: {template_variables[2]}\n"
-            f"  - Teléfono: {template_variables[3]}\n"
-            f"  - Email: {template_variables[4]}\n"
-            f"  - Sucursal: {template_variables[5]}\n"
-            f"  - Productos: {template_variables[6]}\n"
-            f"  - Total: {template_variables[7]}"
-        )
-        
-        support_board_service.log_internal_message(
+    if hasattr(support_board_service, "send_whatsapp_template_direct"):
+        support_board_service.send_whatsapp_template_direct(
+            user_id=customer_platform_user_id,
             conversation_id=conversation_id,
-            message_text=log_message
+            template_variables=template_variables,
         )
-    except Exception as log_err:
-        logger.error(f"Failed to log template confirmation to dashboard for conv {conversation_id}: {log_err}", exc_info=True)
-        # Continue even if logging fails; the template was sent.
-
-    # Step 3: Route conversation to the sales department
-    try:
-        support_board_service.route_conversation_to_sales(conversation_id)
-        logger.info(f"Successfully routed conversation {conversation_id} to sales.")
-    except Exception as route_err:
-        logger.error(f"Failed to route conversation {conversation_id} to sales: {route_err}", exc_info=True)
+    else:
+        support_board_service.send_whatsapp_template(
+            to=customer_platform_user_id,
+            template_name="confirmacion_datos_cliente",
+            template_languages="es_ES",
+            parameters=template_variables,
+            recipient_id=conversation_id,
+        )
 
     return {"status": "success"}
 

@@ -2,7 +2,8 @@
 import requests
 import logging
 import json
-import re # Import regex module for cleaning phone numbers
+import re  # Import regex module for cleaning phone numbers
+import time
 from flask import current_app
 from typing import Optional, List, Dict, Any
 
@@ -334,13 +335,44 @@ def send_reply_to_channel(conversation_id: str, message_text: str, source: Optio
     return external_success
 
 # --- RETAINED FOR BACKWARD COMPATIBILITY OR OTHER USES ---
-def send_whatsapp_template_direct(user_id: str, template_name: str, template_language: str, parameters: list[str]) -> bool:
-    """Sends a WhatsApp template message by looking up the user's WAID from their internal ID."""
+def send_whatsapp_template_direct(user_id: str, conversation_id: str, template_variables: list[str]) -> bool:
+    """Sends the standard order confirmation template to a user's WhatsApp."""
+    template_name = "confirmacion_datos_cliente"
+    template_language = "es_ES"
     recipient_waid = _get_user_waid(user_id)
     if not recipient_waid:
-        logger.error(f"Cannot send template '{template_name}': Failed to derive WAID for user_id '{user_id}'.")
+        logger.error(
+            f"Cannot send template '{template_name}': Failed to derive WAID for user_id '{user_id}'."
+        )
         return False
-    return send_whatsapp_template_to_phone(to_phone_number=recipient_waid, template_name=template_name, template_language=template_language, parameters=parameters)
+
+    ok = send_whatsapp_template_to_phone(
+        to_phone_number=recipient_waid,
+        template_name=template_name,
+        template_language=template_language,
+        parameters=template_variables,
+    )
+
+    if ok:
+        try:
+            log_text = f"📝 Plantilla '{template_name}' enviada a {recipient_waid}"
+            _add_internal_sb_message(conversation_id, log_text, str(Config.SUPPORT_BOARD_DM_BOT_USER_ID))
+        except Exception:
+            logger.exception("Failed to log internal template send message")
+    return ok
+
+
+def send_whatsapp_template(to: str, template_name: str, template_languages: str, parameters: list[str], recipient_id: str) -> bool:
+    """Legacy wrapper used in tests. Sends template via Support Board API."""
+    payload = {
+        "function": "messaging-platforms-send-template",
+        "to": to,
+        "template_name": template_name,
+        "template_languages": template_languages,
+        "parameters": json.dumps(["", ",".join(parameters), ""]),
+        "recipient_id": recipient_id,
+    }
+    return _call_sb_api(payload) is not None
 
 # --- NEW RELIABLE FUNCTION: Send WhatsApp Template to a raw phone number ---
 def send_whatsapp_template_to_phone(to_phone_number: str, template_name: str, template_language: str, parameters: list[str]) -> bool:
@@ -405,4 +437,44 @@ def route_conversation_to_sales(conversation_id: str) -> None:
     _call_sb_api({
         "function": "sb-human-takeover",
         "conversation_id": conversation_id,
+    })
+
+
+# --- Helper: Fetch recent messages for a user ---
+def get_recent_messages(user_id: str, limit: int = 10) -> List[Dict]:
+    payload = {
+        "function": "get-messages",
+        "user_id": user_id,
+        "limit": limit,
+    }
+    result = _call_sb_api(payload)
+    return result if isinstance(result, list) else []
+
+
+def time_window_now_minus(minutes: int) -> float:
+    return time.time() - (minutes * 60)
+
+
+def recent_message_contains_checkout_template(user_id: str, window_minutes: int = 10) -> bool:
+    messages = get_recent_messages(user_id, limit=10)
+    for msg in messages:
+        if (
+            msg.get("direction") == "out"
+            and msg.get("channel") == "whatsapp"
+            and "hemos recibido tu pedido" in msg.get("message", "").lower()
+            and msg.get("timestamp", 0) >= time_window_now_minus(window_minutes)
+        ):
+            return True
+    return False
+
+
+def route_to_sales(user_id: str):
+    sales_department_id = Config.SUPPORT_BOARD_SALES_DEPARTMENT_ID
+    if not sales_department_id:
+        logger.error("SUPPORT_BOARD_SALES_DEPARTMENT_ID not configured")
+        return
+    _call_sb_api({
+        "function": "route-to-department",
+        "user_id": user_id,
+        "department_id": sales_department_id,
     })
