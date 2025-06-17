@@ -202,6 +202,19 @@ def _get_user_waid(user_id: str) -> Optional[str]:
     return waid
 
 
+def _normalize_phone_number(phone: str) -> Optional[str]:
+    """Normalize a raw phone string into a WAID using config country code."""
+    if not phone:
+        return None
+    waid = re.sub(r"\D", "", phone)
+    if not waid:
+        return None
+    default_cc = Config.WHATSAPP_DEFAULT_COUNTRY_CODE
+    if default_cc and not waid.startswith(default_cc):
+        waid = re.sub(r"\D", "", default_cc) + waid
+    return waid
+
+
 # --- PRIVATE HELPER: Send Messenger/Instagram Message (External Delivery via SB API) ---
 def _send_messenger_message(
     psid: str,
@@ -341,10 +354,15 @@ def send_whatsapp_template_direct(user_id: str, conversation_id: str, template_v
     template_language = "es_ES"
     recipient_waid = _get_user_waid(user_id)
     if not recipient_waid:
-        logger.error(
-            f"Cannot send template '{template_name}': Failed to derive WAID for user_id '{user_id}'."
+        logger.warning(
+            f"User ID '{user_id}' not found in Support Board. Treating it as a raw phone number."
         )
-        return False
+        recipient_waid = _normalize_phone_number(user_id)
+        if not recipient_waid:
+            logger.error(
+                f"Cannot send template '{template_name}': Failed to derive WAID for user_id '{user_id}'."
+            )
+            return False
 
     ok = send_whatsapp_template_to_phone(
         to_phone_number=recipient_waid,

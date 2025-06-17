@@ -740,6 +740,12 @@ def process_new_message(
         )
         return
 
+    try:
+        g.customer_user_id = customer_user_id
+        g.conversation_id = sb_conversation_id
+    except Exception:
+        pass
+
     logger.info(
         "Processing message for SB Conv %s (trigger_user=%s, customer=%s, source=%s, trig_msg_id=%s)",
         sb_conversation_id, sender_user_id, customer_user_id, conversation_source, triggering_message_id,
@@ -989,3 +995,8 @@ def process_new_message(
             source=conversation_source, target_user_id=customer_user_id,
             conversation_details=conversation_data, triggering_message_id=triggering_message_id,
         )
+    try:
+        g.customer_user_id = None
+        g.conversation_id = None
+    except Exception:
+        pass
