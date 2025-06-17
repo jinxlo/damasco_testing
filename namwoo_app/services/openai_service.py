@@ -809,7 +809,10 @@ def process_new_message(
 
                         if is_list_request:
                             logger.info(f"List format requested based on user message: '{triggering_user_message_content}'")
-                            formatted_response = product_utils.format_model_list_with_colors(candidate_products)
+                            formatted_response = product_utils.format_model_list_with_colors(
+                                candidate_products,
+                                triggering_user_message_content,
+                            )
                         else:
                             logger.info(f"Recommendation format requested. Invoking AI Sales-Associate.")
                             ranked_products = product_recommender.rank_products(query_text, candidate_products)

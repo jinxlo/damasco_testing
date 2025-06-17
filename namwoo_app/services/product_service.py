@@ -17,6 +17,7 @@ from ..config import Config
 from ..models.product import Product
 from ..utils import db_utils, embedding_utils, product_utils
 from ..utils.whs_utils import canonicalize_whs
+from ..constants import KNOWN_BRANDS
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,6 @@ _MAIN_TYPE_PAT = re.compile(
     r"lavadora|secadora|freidora|microondas|horno)\b",
     flags=re.I,
 )
-# List of known brands for explicit filtering
-KNOWN_BRANDS = {'SAMSUNG', 'TECNO', 'XIAOMI', 'INFINIX', 'DAMASCO'}
 
 
 def _is_accessory(name: str) -> bool:

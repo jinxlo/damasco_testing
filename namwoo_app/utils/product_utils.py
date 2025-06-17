@@ -7,6 +7,7 @@ import locale
 from decimal import Decimal
 from openai import OpenAI
 from ..config import Config
+from ..constants import KNOWN_BRANDS
 
 # Set locale for currency formatting if not already set
 try:
@@ -15,7 +16,10 @@ except locale.Error:
     try:
         locale.setlocale(locale.LC_ALL, 'es_ES.UTF-8')
     except locale.Error:
-        locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+        try:
+            locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+        except locale.Error:
+            locale.setlocale(locale.LC_ALL, 'C')
 
 
 # Initialize a local client for this module if needed
@@ -166,6 +170,19 @@ def group_products_by_model(products: List[Dict]) -> List[Dict]:
         
     return result
 
+
+def _get_key_specs(product: Dict) -> str:
+    """Return a truncated single-line summary from available spec fields."""
+    text = (
+        product.get("llm_summarized_description")
+        or product.get("especificacion")
+        or product.get("specifitacion")
+        or product.get("description")
+        or ""
+    )
+    line = text.splitlines()[0]
+    return line[:200]
+
 def _get_best_available_specs_text(product: Dict) -> str:
     """Gets the best available raw text for specs, prioritizing structured data."""
     spec_str = product.get("especificacion") or product.get("specifitacion")
@@ -185,7 +202,7 @@ def _get_llm_formatted_specs(product: Dict) -> str:
     global _llm_formatter_client
     if not _llm_formatter_client:
         logger.warning("LLM formatter client not available. Falling back to raw specs.")
-        return "Detalles adicionales no disponibles."
+        return _get_key_specs(product)
     
     raw_spec_text = _get_best_available_specs_text(product)
     
@@ -213,8 +230,10 @@ def _get_llm_formatted_specs(product: Dict) -> str:
         formatted_specs = completion.choices[0].message.content.strip()
         return formatted_specs if formatted_specs else "Características destacadas no disponibles."
     except Exception as e:
-        logger.error(f"Error getting LLM-formatted specs for {product.get('item_name')}: {e}")
-        return (product.get("especificacion") or product.get("specifitacion") or "Detalles no disponibles.").splitlines()[0]
+        logger.error(
+            f"Error getting LLM-formatted specs for {product.get('item_name')}: {e}"
+        )
+        return _get_key_specs(product)
 
 def format_ai_recommendations(products: List[Dict]) -> str:
     """Formats the output from the AI Sales-Associate recommender with the new professional format."""
@@ -286,7 +305,11 @@ def format_product_response(grouped_product: Dict, user_query: Optional[str] = N
     price_bs = grouped_product.get("price_bolivar") or grouped_product.get("priceBolivar")
     
     price_usd_str = f"${price_usd:,.2f}" if isinstance(price_usd, (int, float, Decimal)) else "Precio no disponible"
-    price_bs_str = f"Bs. {locale.format_string('%.2f', price_bs, grouping=True)}" if isinstance(price_bs, (int, float, Decimal)) else ""
+    price_bs_str = (
+        f"Bs. {price_bs:,.2f}"
+        if isinstance(price_bs, (int, float, Decimal))
+        else ""
+    )
     full_price_str = f"{price_usd_str} ({price_bs_str})" if price_bs_str else price_usd_str
 
     colors = grouped_product.get("available_colors") or grouped_product.get("colors", [])
@@ -309,15 +332,16 @@ def format_product_response(grouped_product: Dict, user_query: Optional[str] = N
 
     return "\n".join(card_lines).strip()
 
-def format_model_list_with_colors(products: List[Dict]) -> str:
+def format_model_list_with_colors(products: List[Dict], user_query: Optional[str] = None) -> str:
     """Formats a list of models with their available colors."""
     if not products:
         return "No encontré modelos que coincidan con tu búsqueda en este momento."
 
-    # Filter out products of non-requested brands if a brand is specified
-    detected_brands = {brand for brand in KNOWN_BRANDS if brand.lower() in user_query.lower()}
-    if detected_brands:
-        products = [p for p in products if p.get('brand', '').upper() in detected_brands]
+    detected_brands = set()
+    if user_query:
+        detected_brands = {brand for brand in KNOWN_BRANDS if brand.lower() in user_query.lower()}
+        if detected_brands:
+            products = [p for p in products if p.get('brand', '').upper() in detected_brands]
 
     grouped = group_products_by_model(products)
     if not grouped:

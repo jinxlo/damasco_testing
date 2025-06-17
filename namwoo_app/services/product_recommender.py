@@ -91,7 +91,16 @@ def rank_products(user_intent: str, candidates: List[Dict[str, Any]], top_n: int
                 response_format={"type": "json_object"},
             )
             content = response.choices[0].message.content
-            recommendations = json.loads(content).get("recommendations", [])
+            data = json.loads(content)
+            recommendations = data.get("recommendations", [])
+            if not recommendations and "ordered_skus" in data:
+                ordered_products = [
+                    next((c for c in candidates if c.get("item_code") == sku), None)
+                    for sku in data["ordered_skus"]
+                ]
+                ordered_products = [p for p in ordered_products if p]
+                if ordered_products:
+                    return ordered_products[:top_n]
 
             enriched_candidates = []
             # Use the LLM's ordering and enrichment

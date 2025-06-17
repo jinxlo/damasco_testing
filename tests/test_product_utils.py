@@ -1,10 +1,38 @@
 import os
 import importlib.util
 import pytest
+import sys
+import types
+
+# Stub openai dependency for product_utils
+dummy_openai = types.ModuleType('openai')
+dummy_openai.OpenAI = object
+sys.modules.setdefault('openai', dummy_openai)
+
+# Minimal package stubs for relative imports
+pkg = types.ModuleType('namwoo_app')
+pkg.__path__ = []
+utils_pkg = types.ModuleType('namwoo_app.utils')
+utils_pkg.__path__ = []
+pkg.utils = utils_pkg
+config_pkg = types.ModuleType('namwoo_app.config')
+config_mod = types.ModuleType('namwoo_app.config.config')
+class DummyConfig:
+    OPENAI_API_KEY = None
+config_mod.Config = DummyConfig
+sys.modules['namwoo_app'] = pkg
+sys.modules['namwoo_app.utils'] = utils_pkg
+sys.modules['namwoo_app.config'] = config_pkg
+sys.modules['namwoo_app.config.config'] = config_mod
+config_pkg.Config = DummyConfig
+constants_mod = types.ModuleType('namwoo_app.constants')
+constants_mod.KNOWN_BRANDS = {'SAMSUNG', 'TECNO', 'XIAOMI', 'INFINIX', 'DAMASCO'}
+sys.modules['namwoo_app.constants'] = constants_mod
 
 UTILS_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "namwoo_app", "utils", "product_utils.py"))
 spec = importlib.util.spec_from_file_location("product_utils", UTILS_PATH)
 product_utils = importlib.util.module_from_spec(spec)
+product_utils.__package__ = "namwoo_app.utils"
 spec.loader.exec_module(product_utils)
 generate_product_location_id = product_utils.generate_product_location_id
 extract_color_from_name = product_utils.extract_color_from_name
@@ -12,6 +40,7 @@ group_products_by_model = product_utils.group_products_by_model
 get_available_brands = product_utils.get_available_brands
 format_product_response = product_utils.format_product_response
 format_brand_list = product_utils.format_brand_list
+format_model_list_with_colors = product_utils.format_model_list_with_colors
 
 
 def test_generate_product_location_id_basic():
@@ -92,4 +121,24 @@ def test_get_key_specs_truncates_llm_summary():
     result = product_utils._get_key_specs(product)
     assert len(result) == 200
     assert "Otra oracion" not in result
+
+
+def test_format_model_list_with_colors_no_query():
+    products = [
+        {"item_name": "SAMSUNG GALAXY S23 NEGRO", "brand": "SAMSUNG"},
+        {"item_name": "TECNO SPARK 20 AZUL", "brand": "TECNO"},
+    ]
+    msg = format_model_list_with_colors(products)
+    assert "GALAXY S23" in msg
+    assert "SPARK 20" in msg
+
+
+def test_format_model_list_with_colors_with_brand_filter():
+    products = [
+        {"item_name": "SAMSUNG GALAXY S23 NEGRO", "brand": "SAMSUNG"},
+        {"item_name": "TECNO SPARK 20 AZUL", "brand": "TECNO"},
+    ]
+    msg = format_model_list_with_colors(products, user_query="muéstrame Samsung")
+    assert "GALAXY S23" in msg
+    assert "SPARK 20" not in msg
 
