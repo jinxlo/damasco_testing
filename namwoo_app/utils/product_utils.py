@@ -6,7 +6,11 @@ from collections import defaultdict
 import locale
 from decimal import Decimal
 from openai import OpenAI
-from ..config import Config
+try:
+    from ..config import Config
+except Exception:  # pragma: no cover - allow standalone usage without package
+    class Config:
+        pass
 
 # Set locale for currency formatting if not already set
 try:
@@ -15,7 +19,10 @@ except locale.Error:
     try:
         locale.setlocale(locale.LC_ALL, 'es_ES.UTF-8')
     except locale.Error:
-        locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+        try:
+            locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+        except locale.Error:
+            pass
 
 
 # Initialize a local client for this module if needed
@@ -188,7 +195,7 @@ def _get_llm_formatted_specs(product: Dict) -> str:
     global _llm_formatter_client
     if not _llm_formatter_client:
         logger.warning("LLM formatter client not available. Falling back to raw specs.")
-        return "Detalles adicionales no disponibles."
+        return product.get("description", "Detalles adicionales no disponibles.")
     
     raw_spec_text = _get_best_available_specs_text(product)
     
@@ -286,7 +293,10 @@ def format_product_response(grouped_product: Dict, user_query: Optional[str] = N
     price_bs = grouped_product.get("price_bolivar") or grouped_product.get("priceBolivar")
     
     price_usd_str = f"${price_usd:,.2f}" if isinstance(price_usd, (int, float, Decimal)) else "Precio no disponible"
-    price_bs_str = f"Bs. {locale.format_string('%.2f', price_bs, grouping=True)}" if isinstance(price_bs, (int, float, Decimal)) else ""
+    if isinstance(price_bs, (int, float, Decimal)):
+        price_bs_str = f"Bs. {price_bs:,.2f}"
+    else:
+        price_bs_str = ""
     full_price_str = f"{price_usd_str} ({price_bs_str})" if price_bs_str else price_usd_str
 
     colors = grouped_product.get("available_colors") or grouped_product.get("colors", [])
@@ -308,6 +318,13 @@ def format_product_response(grouped_product: Dict, user_query: Optional[str] = N
         card_lines.append(stores_str)
 
     return "\n".join(card_lines).strip()
+
+
+def _get_key_specs(product: Dict) -> str:
+    """Utility for tests: returns the first 200 chars of main spec text."""
+    text = product.get("especificacion") or product.get("llm_summarized_description") or ""
+    text = text.split("\n", 1)[0]
+    return text[:200]
 
 def format_model_list_with_colors(products: List[Dict]) -> str:
     """Formats a list of models with their available colors. The filtering is now done in the DB."""
