@@ -69,13 +69,18 @@ def _prepare_candidate(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def rank_products(user_intent: str, candidates: List[Dict[str, Any]], top_n: int = 3) -> List[Dict[str, Any]]:
+def rank_products(user_intent: str, candidates: List[Dict[str, Any]], top_n: int = 3, sort_by: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Intelligently ranks and selects products using an LLM sales associate persona.
-    Falls back to simpler logic if LLM ranking fails.
+    Falls back to simpler logic if LLM ranking fails or is bypassed.
     """
     if not candidates:
         return []
+
+    # If the search results were already sorted by price, respect that and bypass the LLM.
+    if sort_by in ["price_asc", "price_desc"]:
+        logger.info(f"Bypassing LLM ranker: Results are pre-sorted by '{sort_by}'. Returning top {top_n}.")
+        return candidates[:top_n]
 
     if getattr(Config, "RECOMMENDER_MODE", "llm") == "llm" and _llm_client is not None:
         try:
@@ -111,13 +116,6 @@ def rank_products(user_intent: str, candidates: List[Dict[str, Any]], top_n: int
             # Fall through to the simpler ranking logic below
 
     # --- FALLBACK LOGIC ---
-    is_price_sorted = any(
-        s in user_intent.lower() for s in ["cheapest", "most affordable", "más barato", "mas economico", "price_asc", "price_desc"]
-    )
-    if is_price_sorted:
-        logger.info(f"Fallback: Results are already price-sorted. Returning top {top_n} candidates.")
-        return candidates[:top_n]
-
     logger.info(f"Fallback: Applying low-mid-high price spread ranking.")
     if len(candidates) < 3:
         return sorted(candidates, key=lambda p: p.get("price") or 0.0)
@@ -173,4 +171,4 @@ def get_ranked_products(intent: Dict[str, Any], city: str, top_n: int = 3) -> Li
     if not results:
         return []
     
-    return rank_products(query, results, top_n=top_n)
+    return rank_products(query, results, top_n=top_n, sort_by=sort_by_param)

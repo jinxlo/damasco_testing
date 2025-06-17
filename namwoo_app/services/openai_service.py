@@ -826,7 +826,11 @@ def process_new_message(
                             formatted_response = product_utils.format_model_list_with_colors(candidate_products, triggering_user_message_content)
                         else:
                             logger.info(f"Recommendation format requested. Invoking AI Sales-Associate.")
-                            ranked_products = product_recommender.rank_products(query_text, candidate_products)
+                            ranked_products = product_recommender.rank_products(
+                                user_intent=triggering_user_message_content, 
+                                candidates=candidate_products,
+                                sort_by=args.get("sort_by")
+                            )
                             formatted_response = product_utils.format_ai_recommendations(ranked_products)
                         
                         output_content_str = json.dumps({"status": "success" if candidate_products else "not_found", "formatted_response": formatted_response}, ensure_ascii=False)
