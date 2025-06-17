@@ -375,16 +375,27 @@ def _tool_send_whatsapp_order_summary_template(
 ) -> Dict:
     """Send checkout confirmation template using live pricing and context."""
 
-    # Prefer IDs from Flask context when available
+    # Prefer IDs from Flask context only when necessary
     context_customer = getattr(g, "customer_user_id", None)
     context_conv = getattr(g, "conversation_id", None)
-    if context_customer:
+
+    if not customer_platform_user_id and context_customer:
         customer_platform_user_id = context_customer
+        logger.info(
+            "Using context customer_user_id '%s' for WhatsApp template", customer_platform_user_id
+        )
+    else:
+        logger.info(
+            "Using provided customer identifier '%s' for WhatsApp template", customer_platform_user_id
+        )
+
     if context_conv:
         conversation_id = context_conv
 
     logger.info(
-        f"Orchestrating direct template send for conv {conversation_id} (user {customer_platform_user_id})."
+        "Orchestrating direct template send for conv %s (user %s).",
+        conversation_id,
+        customer_platform_user_id,
     )
 
     # Inject live price based on SKU if present

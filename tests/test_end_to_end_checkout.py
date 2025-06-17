@@ -97,3 +97,33 @@ def test_end_to_end_checkout(monkeypatch):
     assert len(calls[0]) == 8
     names = [t["function"]["name"] for t in openai_service.tools_schema]
     assert "initiate_customer_information_collection" not in names
+
+
+def test_direct_send_uses_provided_phone(monkeypatch):
+    captured = {}
+
+    def fake_direct(user_id=None, conversation_id=None, template_variables=None):
+        captured['user_id'] = user_id
+        captured['conversation_id'] = conversation_id
+        captured['template_variables'] = template_variables
+        return True
+
+    monkeypatch.setattr(
+        openai_service.support_board_service,
+        "send_whatsapp_template_direct",
+        fake_direct,
+        raising=False,
+    )
+
+    openai_service.g.customer_user_id = "context_id"
+    openai_service.g.conversation_id = "ctx_conv"
+
+    res = openai_service._tool_send_whatsapp_order_summary_template(
+        customer_platform_user_id="+5551111",
+        conversation_id="orig_conv",
+        template_variables=[str(i) for i in range(8)],
+    )
+
+    assert res == {"status": "success"}
+    assert captured["user_id"] == "+5551111"
+    assert captured["conversation_id"] == "ctx_conv"
