@@ -309,15 +309,10 @@ def format_product_response(grouped_product: Dict, user_query: Optional[str] = N
 
     return "\n".join(card_lines).strip()
 
-def format_model_list_with_colors(products: List[Dict], user_query: str) -> str:
-    """Formats a list of models with their available colors, strictly filtering by brand if mentioned."""
+def format_model_list_with_colors(products: List[Dict]) -> str:
+    """Formats a list of models with their available colors. The filtering is now done in the DB."""
     if not products:
         return "No encontré modelos que coincidan con tu búsqueda en este momento."
-
-    # --- BUG FIX: Add brand filtering to the list formatter ---
-    detected_brands = {brand for brand in KNOWN_BRANDS if brand.lower() in user_query.lower()}
-    if detected_brands:
-        products = [p for p in products if p.get('brand', '').upper() in detected_brands]
 
     grouped = group_products_by_model(products)
     if not grouped:

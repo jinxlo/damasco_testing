@@ -365,15 +365,56 @@ def _tool_send_whatsapp_order_summary_template(
     conversation_id: str,
     template_variables: list[str],
 ) -> Dict:
-    phone_number = customer_platform_user_id
-    ok = support_board_service.send_whatsapp_template(
-        to=phone_number,
+    """Orchestrates sending a template directly, logging it, and routing."""
+    
+    logger.info(f"Orchestrating direct template send for conv {conversation_id}.")
+    
+    # Step 1: Send the template directly via Meta Cloud API
+    send_ok = support_board_service.send_whatsapp_template_direct(
+        user_id=customer_platform_user_id,
         template_name="confirmacion_datos_cliente",
-        template_languages="es_ES",
+        template_language="es_ES",
         parameters=template_variables,
-        recipient_id=conversation_id,
     )
-    return {"status": "success" if ok else "failed"}
+
+    if not send_ok:
+        logger.error(f"Direct WhatsApp template send failed for conversation {conversation_id}.")
+        return {"status": "failed", "error": "API call to send template failed."}
+
+    logger.info(f"Direct WhatsApp template send successful for conv {conversation_id}.")
+    
+    # Step 2: Log a confirmation message to the Support Board dashboard for agent visibility.
+    try:
+        # We need the phone number for the log message, _get_user_waid provides it without the country code prefix logic
+        waid = support_board_service._get_user_waid(customer_platform_user_id) or "ID: " + customer_platform_user_id
+        log_message = (
+            f"📝 Plantilla de WhatsApp 'confirmacion_datos_cliente' enviada a {waid}.\n\n"
+            f"Contenido:\n"
+            f"  - Cliente: {template_variables[0]} {template_variables[1]}\n"
+            f"  - Cédula: {template_variables[2]}\n"
+            f"  - Teléfono: {template_variables[3]}\n"
+            f"  - Email: {template_variables[4]}\n"
+            f"  - Sucursal: {template_variables[5]}\n"
+            f"  - Productos: {template_variables[6]}\n"
+            f"  - Total: {template_variables[7]}"
+        )
+        
+        support_board_service.log_internal_message(
+            conversation_id=conversation_id,
+            message_text=log_message
+        )
+    except Exception as log_err:
+        logger.error(f"Failed to log template confirmation to dashboard for conv {conversation_id}: {log_err}", exc_info=True)
+        # Continue even if logging fails; the template was sent.
+
+    # Step 3: Route conversation to the sales department
+    try:
+        support_board_service.route_conversation_to_sales(conversation_id)
+        logger.info(f"Successfully routed conversation {conversation_id} to sales.")
+    except Exception as route_err:
+        logger.error(f"Failed to route conversation {conversation_id} to sales: {route_err}", exc_info=True)
+
+    return {"status": "success"}
 
 def _tool_find_relevant_accessory(main_product_category: str, warehouse_names: List[str]) -> str:
     """Finds a relevant, in-stock accessory for a given product category and location."""
@@ -383,13 +424,32 @@ def _tool_find_relevant_accessory(main_product_category: str, warehouse_names: L
     else:
         return json.dumps({"status": "not_found", "message": "No relevant accessory found."}, ensure_ascii=False)
 
-def _tool_get_product_availability(item_code: str) -> str:
-    """Gets all available branch names for a given product SKU."""
-    locations = product_service.get_product_availability_by_sku(item_code)
+def _tool_get_product_availability(
+    product_identifier: str, conversation_id: str
+) -> str:
+    """Gets all available branch names for a given product SKU or model name, filtered by the conversation's city."""
+    user_city = conversation_location.get_conversation_city(conversation_id)
+    warehouses = None
+    if user_city:
+        warehouses = conversation_location.get_warehouses_for_city(user_city)
+        logger.info(
+            f"Availability check for '{product_identifier}' will be filtered by warehouses for city '{user_city}': {warehouses}"
+        )
+    else:
+        logger.warning(
+            f"No city context for conversation {conversation_id}. Availability check for '{product_identifier}' will be nationwide."
+        )
+
+    locations = product_service.get_product_availability(
+        product_identifier, warehouse_names=warehouses
+    )
     if locations:
         return json.dumps({"status": "success", "locations": locations}, ensure_ascii=False)
     else:
-        return json.dumps({"status": "not_found", "message": "Product not found or out of stock anywhere."}, ensure_ascii=False)
+        return json.dumps(
+            {"status": "not_found", "message": "Product not found or out of stock in this city."}, ensure_ascii=False
+        )
+
 
 # ===========================================================================
 
@@ -562,16 +622,16 @@ tools_schema = [
         "type": "function",
         "function": {
             "name": "get_product_availability",
-            "description": "Verifica todas las sucursales (branch_name) donde un producto específico, identificado por su SKU (item_code), está disponible con stock.",
+            "description": "Verifica todas las sucursales (branch_name) donde un producto específico, identificado por su SKU o nombre de modelo, está disponible con stock.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "item_code": {
+                    "product_identifier": {
                         "type": "string",
-                        "description": "El SKU (item_code) del producto para verificar su disponibilidad en las tiendas."
+                        "description": "El SKU (item_code) o el nombre del modelo del producto para verificar su disponibilidad en las tiendas."
                     }
                 },
-                "required": ["item_code"]
+                "required": ["product_identifier"]
             }
         }
     },
@@ -799,12 +859,6 @@ def process_new_message(
                         if "warehouse_names" in args and args["warehouse_names"]:
                             args["warehouse_names"] = [canonicalize_whs_name(n) for n in args["warehouse_names"]]
                         
-                        required_specs = _extract_specs_from_query(query_text)
-                        args['required_specs'] = required_specs
-                        args['exclude_skus'] = previously_shown_skus
-                        
-                        candidate_products = product_service.search_local_products(**args)
-                        
                         triggering_user_message_content = ""
                         query_keywords = set(query_text.lower().split())
                         for msg in reversed(messages):
@@ -820,10 +874,17 @@ def process_new_message(
                                     break
                         
                         is_list_request = product_utils.user_is_asking_for_list(triggering_user_message_content)
+                        args['is_list_query'] = is_list_request # Pass the flag to the service
+                        
+                        required_specs = _extract_specs_from_query(query_text)
+                        args['required_specs'] = required_specs
+                        args['exclude_skus'] = previously_shown_skus
+                        
+                        candidate_products = product_service.search_local_products(**args)
 
                         if is_list_request:
                             logger.info(f"List format requested based on user message: '{triggering_user_message_content}'")
-                            formatted_response = product_utils.format_model_list_with_colors(candidate_products, triggering_user_message_content)
+                            formatted_response = product_utils.format_model_list_with_colors(candidate_products)
                         else:
                             logger.info(f"Recommendation format requested. Invoking AI Sales-Associate.")
                             ranked_products = product_recommender.rank_products(
@@ -857,6 +918,7 @@ def process_new_message(
                     elif fn_name == "find_relevant_accessory":
                         output_content_str = _tool_find_relevant_accessory(**args)
                     elif fn_name == "get_product_availability":
+                        args['conversation_id'] = sb_conversation_id
                         output_content_str = _tool_get_product_availability(**args)
                     elif fn_name == "send_whatsapp_order_summary_template":
                         cust_id_arg = args.get("customer_platform_user_id") or customer_user_id

@@ -73,31 +73,30 @@ def search_local_products(
     exclude_accessories: bool = True,
     required_specs: Optional[List[str]] = None,
     exclude_skus: Optional[List[str]] = None,
+    is_list_query: bool = False,
 ) -> Optional[List[Dict[str, Any]]]:
     if not query_text or not isinstance(query_text, str):
         logger.warning("Search query is empty or invalid.")
         return []
 
     log_message_parts = [
-        f"Vector search initiated: '{query_text[:80]}…'",
-        f"limit={limit}", f"stock_filter={filter_stock}", f"min_score={min_score:.2f}",
+        f"Search initiated: '{query_text[:80]}…'",
+        f"limit={limit}", f"is_list_query={is_list_query}",
     ]
     if warehouse_names:
         log_message_parts.append(f"warehouses={warehouse_names}")
-    if required_specs:
-        log_message_parts.append(f"required_specs={required_specs}")
-    if min_price is not None:
-        log_message_parts.append(f"min_price={min_price}")
-    if max_price is not None:
-        log_message_parts.append(f"max_price={max_price}")
-        
+    
     logger.info(", ".join(log_message_parts))
 
-    embedding_model = (Config.OPENAI_EMBEDDING_MODEL if hasattr(Config, "OPENAI_EMBEDDING_MODEL") else "text-embedding-3-small")
-    query_emb = embedding_utils.get_embedding(query_text, model=embedding_model)
-    if not query_emb:
-        logger.error("Query embedding generation failed – aborting search.")
-        return None
+    # For list queries, we don't need a vector embedding, but create a dummy one to prevent errors.
+    if is_list_query:
+        query_emb = [0.0] * (Config.EMBEDDING_DIMENSION or 1536)
+    else:
+        embedding_model = (Config.OPENAI_EMBEDDING_MODEL if hasattr(Config, "OPENAI_EMBEDDING_MODEL") else "text-embedding-3-small")
+        query_emb = embedding_utils.get_embedding(query_text, model=embedding_model)
+        if not query_emb:
+            logger.error("Query embedding generation failed – aborting search.")
+            return None
 
     with db_utils.get_db_session() as session:
         if not session:
@@ -106,7 +105,7 @@ def search_local_products(
         try:
             base_q = session.query(
                 Product,
-                Product.embedding.cosine_distance(query_emb).label("distance"),
+                (Product.embedding.cosine_distance(query_emb) if not is_list_query else literal_column("'0'")).label("distance"),
             )
 
             if filter_stock:
@@ -123,7 +122,6 @@ def search_local_products(
                 base_q = base_q.filter(Product.sub_category.notilike('%ACCESORIO%'))
                 base_q = base_q.filter(Product.category.notilike('%ACCESORIO%'))
 
-            # --- BUG FIX: Add Brand and Price Filtering ---
             detected_brands = [brand for brand in KNOWN_BRANDS if brand.lower() in query_text.lower()]
             if detected_brands:
                 brand_clauses = [Product.brand.ilike(f'%{b}%') for b in detected_brands]
@@ -134,18 +132,24 @@ def search_local_products(
                 base_q = base_q.filter(Product.price >= min_price)
             if max_price is not None:
                 base_q = base_q.filter(Product.price <= max_price)
-            # --- END BUG FIX ---
 
+            partition_order_by = (
+                Product.price.asc() if is_list_query 
+                else Product.embedding.cosine_distance(query_emb).asc()
+            )
+            
             ranked_subquery = base_q.add_column(
                 func.row_number().over(
                     partition_by=Product.item_code,
-                    order_by=Product.embedding.cosine_distance(query_emb).asc()
+                    order_by=partition_order_by
                 ).label('rn')
             ).subquery('ranked_products')
 
             unique_candidates_q = session.query(ranked_subquery).filter(ranked_subquery.c.rn == 1)
 
-            if sort_by == "price_asc":
+            if is_list_query:
+                unique_candidates_q = unique_candidates_q.order_by(ranked_subquery.c.item_name.asc())
+            elif sort_by == "price_asc":
                 unique_candidates_q = unique_candidates_q.order_by(ranked_subquery.c.price.asc())
             elif sort_by == "price_desc":
                 unique_candidates_q = unique_candidates_q.order_by(ranked_subquery.c.price.desc())
@@ -153,7 +157,7 @@ def search_local_products(
                 unique_candidates_q = unique_candidates_q.order_by(ranked_subquery.c.distance.asc())
 
             candidate_rows = unique_candidates_q.limit(limit * 3).all()
-            logger.info(f"Stage 1 Search: Found {len(candidate_rows)} unique semantic candidates.")
+            logger.info(f"Stage 1 Search: Found {len(candidate_rows)} unique candidates.")
 
             if required_specs:
                 filtered_candidates = []
@@ -201,7 +205,8 @@ def search_local_products(
             for row in candidate_rows[:limit]: # Apply final limit after filtering
                 representative_product_dict = row._asdict()
                 similarity = 1 - float(representative_product_dict['distance'])
-                if similarity < min_score:
+                
+                if not is_list_query and similarity < min_score:
                     continue
 
                 base_model_name = product_utils.get_base_model_name(representative_product_dict['item_name'])
@@ -235,7 +240,7 @@ def search_local_products(
 
                 enriched_results.append(final_product_dict)
 
-            logger.info(f"[VECTOR SEARCH] Final enriched results returned: {len(enriched_results)}")
+            logger.info(f"[Product Search] Final enriched results returned: {len(enriched_results)}")
             return enriched_results
 
         except SQLAlchemyError as db_exc:
@@ -643,21 +648,49 @@ def find_relevant_accessory(main_product_category: str, warehouse_names: List[st
             logger.exception(f"Error finding relevant accessory: {e}")
             return None
 
-def get_product_availability_by_sku(item_code: str) -> Optional[List[str]]:
-    """Returns a list of unique branch names where the product is in stock."""
-    if not item_code: return None
+def get_product_availability(
+    product_identifier: str, warehouse_names: Optional[List[str]] = None
+) -> Optional[List[str]]:
+    """
+    Returns a list of unique branch names where the product is in stock,
+    optionally filtered by the warehouses of a specific city.
+    Accepts either a SKU or a model name.
+    """
+    if not product_identifier:
+        return None
+    
+    identifier = str(product_identifier).strip()
+    is_sku = bool(re.match(r'^D\d+$', identifier, re.IGNORECASE))
+    
     with db_utils.get_db_session() as session:
-        if not session: return None
+        if not session:
+            return None
         try:
-            results = session.query(distinct(Product.branch_name)).filter(
-                Product.item_code.ilike(item_code),
+            query = session.query(distinct(Product.branch_name)).filter(
                 Product.stock > 0,
                 Product.branch_name.isnot(None)
-            ).order_by(Product.branch_name).all()
+            )
+
+            # Filter by location if specified
+            if warehouse_names:
+                canonical_whs_names = [canonicalize_whs(w) for w in warehouse_names if w]
+                if canonical_whs_names:
+                    query = query.filter(Product.warehouse_name_canonical.in_(canonical_whs_names))
+                    logger.info(f"Filtering availability search to warehouses: {canonical_whs_names}")
+
+            if is_sku:
+                logger.info(f"Getting availability for specific SKU: '{identifier}'")
+                query = query.filter(Product.item_code.ilike(identifier))
+            else:
+                logger.info(f"Getting availability for model name: '{identifier}'")
+                base_model_name = product_utils.get_base_model_name(identifier)
+                query = query.filter(Product.item_name.ilike(f"{base_model_name}%"))
+
+            results = query.order_by(Product.branch_name).all()
             
             locations = [row[0] for row in results if row[0]]
-            logger.info(f"Found {len(locations)} in-stock locations for SKU '{item_code}': {locations}")
+            logger.info(f"Found {len(locations)} in-stock locations for identifier '{identifier}': {locations}")
             return locations
         except Exception as e:
-            logger.exception(f"Error getting availability for SKU '{item_code}': {e}")
+            logger.exception(f"Error getting availability for identifier '{identifier}': {e}")
             return None
