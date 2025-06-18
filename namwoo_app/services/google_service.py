@@ -308,8 +308,15 @@ def process_new_message_gemini(
                                 break
 
                         is_list_request = product_utils.user_is_asking_for_list(last_user_message_content)
-                        if is_list_request:
-                            formatted_response = product_utils.format_product_list_response(candidate_products)
+                        is_price_request = product_utils.user_is_asking_for_price(last_user_message_content)
+                        if is_price_request:
+                            grouped = product_utils.group_products_by_model(candidate_products)
+                            if grouped:
+                                formatted_response = product_utils.format_product_response(grouped[0], args.get("query_text", ""))
+                            else:
+                                formatted_response = product_utils.format_multiple_products_response(candidate_products, args.get("query_text", ""))
+                        elif is_list_request:
+                            formatted_response = product_utils.format_model_list_with_colors(candidate_products)
                         else:
                             ranked_products = product_recommender.rank_products(args.get("query_text", ""), candidate_products)
                             formatted_response = product_utils.format_multiple_products_response(ranked_products, args.get("query_text", ""))

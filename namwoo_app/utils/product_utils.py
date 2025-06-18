@@ -66,6 +66,27 @@ def user_is_asking_for_list(message: str) -> bool:
     normalized = unicodedata.normalize("NFKD", message).encode("ascii", "ignore").decode().lower()
     return any(kw in normalized for kw in LIST_KEYWORDS)
 
+def user_is_asking_for_price(message: str) -> bool:
+    """Return True if the user clearly wants the price of a product."""
+    if not message:
+        return False
+    PRICE_KEYWORDS = [
+        "precio de",
+        "precio del",
+        "cual es el precio",
+        "cuanto cuesta",
+        "cuánto cuesta",
+        "dime el precio",
+        "price of",
+        "how much is",
+        "how much does",
+        "cost of",
+        "cost for",
+    ]
+    import unicodedata
+    normalized = unicodedata.normalize("NFKD", message).encode("ascii", "ignore").decode().lower()
+    return any(kw in normalized for kw in PRICE_KEYWORDS)
+
 def _normalize_string_for_id_part(value: Any) -> Optional[str]:
     if value is None:
         return None

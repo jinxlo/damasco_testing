@@ -93,3 +93,20 @@ def test_get_key_specs_truncates_llm_summary():
     assert len(result) == 200
     assert "Otra oracion" not in result
 
+
+def test_user_is_asking_for_price_detection():
+    price_msgs = [
+        "¿Cuál es el precio del TECNO SPARK?",
+        "precio de D0001234",
+        "How much is the iPhone 15?",
+    ]
+    for msg in price_msgs:
+        assert product_utils.user_is_asking_for_price(msg)
+
+    non_price_msgs = [
+        "Tienes modelos disponibles?",
+        "busco el mas barato",
+    ]
+    for msg in non_price_msgs:
+        assert not product_utils.user_is_asking_for_price(msg)
+

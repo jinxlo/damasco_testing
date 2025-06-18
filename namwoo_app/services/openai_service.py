@@ -38,6 +38,9 @@ user_is_asking_for_cheapest = getattr(
 user_is_asking_for_list = getattr(
     product_utils, "user_is_asking_for_list", lambda message: False
 )
+user_is_asking_for_price = getattr(
+    product_utils, "user_is_asking_for_price", lambda message: False
+)
 import re
 
 
@@ -887,7 +890,8 @@ def process_new_message(
                                     break
                         
                         is_list_request = product_utils.user_is_asking_for_list(triggering_user_message_content)
-                        args['is_list_query'] = is_list_request # Pass the flag to the service
+                        is_price_request = product_utils.user_is_asking_for_price(triggering_user_message_content)
+                        args['is_list_query'] = is_list_request
                         
                         required_specs = _extract_specs_from_query(query_text)
                         args['required_specs'] = required_specs
@@ -895,13 +899,26 @@ def process_new_message(
                         
                         candidate_products = product_service.search_local_products(**args)
 
-                        if is_list_request:
-                            logger.info(f"List format requested based on user message: '{triggering_user_message_content}'")
+                        if is_price_request:
+                            logger.info(
+                                f"Price query detected based on user message: '{triggering_user_message_content}'"
+                            )
+                            grouped = product_utils.group_products_by_model(candidate_products)
+                            if grouped:
+                                formatted_response = product_utils.format_product_response(
+                                    grouped[0], query_text
+                                )
+                            else:
+                                formatted_response = product_utils.format_ai_recommendations(candidate_products)
+                        elif is_list_request:
+                            logger.info(
+                                f"List format requested based on user message: '{triggering_user_message_content}'"
+                            )
                             formatted_response = product_utils.format_model_list_with_colors(candidate_products)
                         else:
-                            logger.info(f"Recommendation format requested. Invoking AI Sales-Associate.")
+                            logger.info("Recommendation format requested. Invoking AI Sales-Associate.")
                             ranked_products = product_recommender.rank_products(
-                                user_intent=triggering_user_message_content, 
+                                user_intent=triggering_user_message_content,
                                 candidates=candidate_products,
                                 sort_by=args.get("sort_by")
                             )
