@@ -110,3 +110,20 @@ def test_user_is_asking_for_price_detection():
     for msg in non_price_msgs:
         assert not product_utils.user_is_asking_for_price(msg)
 
+
+def test_user_is_asking_for_list_detection():
+    list_msgs = [
+        "me puedes decir los modelos samsung que tienes disponible?",
+        "¿qué modelos de xiaomi tienen?",
+        "muéstrame todos los modelos que tienes"
+    ]
+    for msg in list_msgs:
+        assert product_utils.user_is_asking_for_list(msg)
+
+    non_list_msgs = [
+        "tienes el modelo a26?",
+        "quiero saber el precio del samsung a26"
+    ]
+    for msg in non_list_msgs:
+        assert not product_utils.user_is_asking_for_list(msg)
+

@@ -64,7 +64,13 @@ def user_is_asking_for_list(message: str) -> bool:
     ]
     import unicodedata
     normalized = unicodedata.normalize("NFKD", message).encode("ascii", "ignore").decode().lower()
-    return any(kw in normalized for kw in LIST_KEYWORDS)
+    if any(kw in normalized for kw in LIST_KEYWORDS):
+        return True
+    if "modelos" in normalized and (
+        "tienes" in normalized or "tienen" in normalized or "disponible" in normalized or "disponibles" in normalized
+    ):
+        return True
+    return False
 
 def user_is_asking_for_price(message: str) -> bool:
     """Return True if the user clearly wants the price of a product."""
