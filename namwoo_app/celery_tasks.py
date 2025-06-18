@@ -17,6 +17,7 @@ from .celery_app import celery_app, FlaskTask
 from .services import product_service, openai_service
 from .services import llm_processing_service
 from .utils import db_utils, text_utils # text_utils is used by Product model
+from .utils.whs_utils import canonicalize_whs_name
 from .models.product import Product
 from .config import Config
 
@@ -118,7 +119,8 @@ def _normalize_string_for_id_parts(value: Any) -> Optional[str]:
 
 def _generate_product_location_id(item_code: str, warehouse_name: str) -> Optional[str]:
     norm_item_code = _normalize_string_for_id_parts(item_code)
-    norm_whs_name = _normalize_string_for_id_parts(warehouse_name)
+    canonical_name = canonicalize_whs_name(_normalize_string_for_id_parts(warehouse_name))
+    norm_whs_name = _normalize_string_for_id_parts(canonical_name)
 
     if not norm_item_code or not norm_whs_name: # Pydantic should ensure these are non-empty strings
         logger.error(f"ID Generation Error: item_code ('{item_code}') or whs_name ('{warehouse_name}') became empty. This is unexpected after Pydantic validation.")

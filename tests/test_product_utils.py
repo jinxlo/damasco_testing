@@ -13,6 +13,13 @@ get_available_brands = product_utils.get_available_brands
 format_product_response = product_utils.format_product_response
 format_brand_list = product_utils.format_brand_list
 
+WH_UTILS_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "namwoo_app", "utils", "whs_utils.py"))
+wh_spec = importlib.util.spec_from_file_location("whs_utils", WH_UTILS_PATH)
+whs_utils = importlib.util.module_from_spec(wh_spec)
+wh_spec.loader.exec_module(whs_utils)
+canonicalize_whs_name = whs_utils.canonicalize_whs_name
+product_utils.canonicalize_whs_name = canonicalize_whs_name
+
 
 def test_generate_product_location_id_basic():
     assert generate_product_location_id("ABC123", "Main Warehouse") == "ABC123_Main_Warehouse"
@@ -126,4 +133,13 @@ def test_user_is_asking_for_list_detection():
     ]
     for msg in non_list_msgs:
         assert not product_utils.user_is_asking_for_list(msg)
+
+
+def test_generate_product_location_id_canonicalizes_branch():
+    result = generate_product_location_id("SKU1", "CCCT")
+    assert result == "SKU1_Almacen_Principal_CCCT"
+
+
+def test_canonicalize_whs_name_maps_branch():
+    assert canonicalize_whs_name("CCCT") == "Almacen Principal CCCT"
 
