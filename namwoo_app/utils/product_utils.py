@@ -93,6 +93,17 @@ def user_is_asking_for_price(message: str) -> bool:
     normalized = unicodedata.normalize("NFKD", message).encode("ascii", "ignore").decode().lower()
     return any(kw in normalized for kw in PRICE_KEYWORDS)
 
+def extract_brand_from_message(message: str) -> Optional[str]:
+    """Return a known brand mentioned in the user's message, if any."""
+    if not message:
+        return None
+    import unicodedata
+    normalized = unicodedata.normalize("NFKD", message).encode("ascii", "ignore").decode().upper()
+    for brand in KNOWN_BRANDS:
+        if brand in normalized:
+            return brand
+    return None
+
 def _normalize_string_for_id_part(value: Any) -> Optional[str]:
     if value is None:
         return None

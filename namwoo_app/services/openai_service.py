@@ -782,6 +782,28 @@ def process_new_message(
         )
         return
 
+    if new_user_message and product_utils.user_is_asking_for_list(new_user_message):
+        brand = product_utils.extract_brand_from_message(new_user_message)
+        if brand:
+            warehouses = conversation_location.get_city_warehouses(sb_conversation_id)
+            products = product_service.search_local_products(
+                query_text=brand,
+                warehouse_names=warehouses,
+                is_list_query=True,
+                limit=getattr(Config, "PRODUCT_SEARCH_LIMIT", 20),
+            )
+            if products is not None:
+                formatted = product_utils.format_model_list_with_colors(products)
+                support_board_service.send_reply_to_channel(
+                    conversation_id=sb_conversation_id,
+                    message_text=formatted,
+                    source=conversation_source,
+                    target_user_id=customer_user_id,
+                    conversation_details=conversation_data,
+                    triggering_message_id=triggering_message_id,
+                )
+                return
+
     sb_history_list = conversation_data.get("messages", [])
     try:
         openai_history, previously_shown_skus = _prune_and_format_sb_history(sb_history_list)

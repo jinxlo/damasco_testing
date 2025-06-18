@@ -143,3 +143,9 @@ def test_generate_product_location_id_canonicalizes_branch():
 def test_canonicalize_whs_name_maps_branch():
     assert canonicalize_whs_name("CCCT") == "Almacen Principal CCCT"
 
+
+def test_extract_brand_from_message():
+    assert product_utils.extract_brand_from_message("que modelos samsung tienes") == "SAMSUNG"
+    assert product_utils.extract_brand_from_message("tienes celulares xiaomi?") == "XIAOMI"
+    assert product_utils.extract_brand_from_message("busco huawei") is None
+
