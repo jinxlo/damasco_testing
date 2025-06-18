@@ -100,10 +100,23 @@ def _normalize_string_for_id_part(value: Any) -> Optional[str]:
     return s if s else None
 
 
+try:
+    from .whs_utils import canonicalize_whs_name
+except Exception:  # pragma: no cover - allow standalone usage without package
+    def canonicalize_whs_name(name):
+        return name
+
+
 def generate_product_location_id(item_code_raw: Any, whs_name_raw: Any) -> Optional[str]:
-    """Generates the composite product ID consistently."""
+    """Generates the composite product ID consistently.
+
+    The warehouse name is first mapped to its canonical form using
+    :func:`canonicalize_whs_name` so that IDs remain stable across
+    slightly different warehouse representations.
+    """
     item_code = _normalize_string_for_id_part(item_code_raw)
-    whs_name = _normalize_string_for_id_part(whs_name_raw)
+    canonical_whs_name = canonicalize_whs_name(_normalize_string_for_id_part(whs_name_raw))
+    whs_name = _normalize_string_for_id_part(canonical_whs_name)
     if not item_code or not whs_name:
         return None
     sanitized_whs_name = re.sub(r'[^a-zA-Z0-9_-]', '_', whs_name)

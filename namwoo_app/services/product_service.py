@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from ..config import Config
 from ..models.product import Product
 from ..utils import db_utils, embedding_utils, product_utils
-from ..utils.whs_utils import canonicalize_whs
+from ..utils.whs_utils import canonicalize_whs, canonicalize_whs_name
 
 logger = logging.getLogger(__name__)
 
@@ -280,7 +280,8 @@ def add_or_update_product_in_db(
     if not item_code or not whs_name_raw:
         logger.error("Missing itemCode or whsName; cannot upsert product.")
         return False, "missing_item_or_whs"
-    whs_canonical = canonicalize_whs(whs_name_raw)
+    canonical_whs_name = canonicalize_whs_name(whs_name_raw) or whs_name_raw
+    whs_canonical = canonicalize_whs(canonical_whs_name)
 
     if not damasco_product_data_camel or not isinstance(
         damasco_product_data_camel, dict
@@ -388,7 +389,7 @@ def add_or_update_product_in_db(
             damasco_product_data_camel.get("itemGroupName")
         ),
         "especificacion": _normalize_string(especificacion_value),
-        "warehouse_name": whs_name_raw,
+        "warehouse_name": canonical_whs_name,
         "branch_name": _normalize_string(damasco_product_data_camel.get("branchName")),
         "price": normalized_price_for_db,
         "price_bolivar": normalized_price_bolivar_for_db,
@@ -397,7 +398,7 @@ def add_or_update_product_in_db(
         "embedding": embedding_vector_for_db,
         "source_data_json": damasco_product_data_camel,
     }
-    product_id = product_utils.generate_product_location_id(item_code, whs_name_raw)
+    product_id = product_utils.generate_product_location_id(item_code, canonical_whs_name)
     if not product_id:
         logger.error(f"{log_prefix} Failed to generate product ID.")
         return False, "invalid_generated_id"
