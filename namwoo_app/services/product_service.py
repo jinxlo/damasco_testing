@@ -6,6 +6,7 @@ from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from decimal import InvalidOperation as InvalidDecimalOperation
 from typing import Any, Dict, List, Optional, Tuple, Union
+from difflib import SequenceMatcher
 
 import numpy as np
 from sqlalchemy import func, literal_column, distinct, or_, and_
@@ -155,14 +156,14 @@ def search_local_products(
             candidate_rows = unique_candidates_q.limit(limit * 3).all()
             logger.info(f"Stage 1 Search: Found {len(candidate_rows)} unique candidates.")
 
-            # If no candidates were found and retry_on_miss is enabled, attempt a
-            # fuzzy correction on the query using existing product names.
-            if not candidate_rows and retry_on_miss:
+            # If no candidates were found, attempt a fuzzy typo correction as a fallback.
+            if not candidate_rows and retry_on_miss and not is_list_query:
+                logger.warning(
+                    f"Initial semantic search for '{query_text}' found no results. Attempting typo correction."
+                )
                 suggestion = _suggest_closest_product_name(query_text, session, detected_brands)
                 if suggestion and suggestion.lower() != query_text.lower():
-                    logger.info(
-                        f"Retrying product search with corrected text: '{suggestion}'"
-                    )
+                    logger.info(f"Retrying product search with corrected text: '{suggestion}'")
                     return search_local_products(
                         suggestion,
                         limit=limit,
@@ -289,8 +290,6 @@ def _suggest_closest_product_name(
         candidate_names = [row[0] for row in candidate_q.limit(1000).all()]
         if not candidate_names:
             return None
-
-        from difflib import SequenceMatcher
 
         best_name = None
         best_ratio = 0.0
