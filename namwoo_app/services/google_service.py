@@ -330,9 +330,7 @@ def process_new_message_gemini(
                         query_text = messages[-2].get('content', '') if len(messages) > 1 else ''
                         details = None
                         if ident and id_type == "sku":
-                            user_city = conversation_location.get_conversation_city(conversation_id)
-                            warehouses = conversation_location.get_warehouses_for_city(user_city) if user_city else None
-                            details_list = product_service.get_live_product_details_by_sku(ident, warehouse_names=warehouses)
+                            details_list = product_service.get_live_product_details_by_sku(ident)
                             if details_list: details = product_utils.format_product_response(product_utils.group_products_by_model(details_list)[0], query_text)
                         elif ident and id_type == "composite_id":
                             details_dict = product_service.get_live_product_details_by_id(ident)

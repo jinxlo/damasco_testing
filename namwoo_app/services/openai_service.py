@@ -1061,12 +1061,7 @@ def process_new_message(
                         if ident and id_type:
                             ident, id_type = _resolve_product_identifier(ident, id_type, sb_conversation_id)
                             if id_type == "sku":
-                                user_city = conversation_location.get_conversation_city(sb_conversation_id)
-                                warehouses = conversation_location.get_warehouses_for_city(user_city) if user_city else None
-                                details_list = product_service.get_live_product_details_by_sku(
-                                    item_code_query=ident,
-                                    warehouse_names=warehouses,
-                                )
+                                details_list = product_service.get_live_product_details_by_sku(item_code_query=ident)
                                 if details_list:
                                     grouped = product_utils.group_products_by_model(details_list)
                                     if grouped:
