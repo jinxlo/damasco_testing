@@ -639,24 +639,16 @@ tools_schema = [
         "type": "function",
         "function": {
             "name": "get_live_product_details",
-            "description": (
-                "Obtiene información detallada y actualizada de un producto específico de Damasco, incluyendo precio (USD), precio en Bolívares (`priceBolivar`), y stock por sucursal. "
-                "Usar cuando el usuario pregunta por un producto específico (por SKU/código) o después de `search_local_products` si quiere más detalles."
-            ),
+            "description": "Obtiene información detallada y actualizada de un producto específico, ya sea por su nombre de modelo o código SKU.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "product_identifier": {
                         "type": "string",
-                        "description": "El código de item (SKU) del producto o el ID compuesto (itemCode_warehouseName).",
-                    },
-                    "identifier_type": {
-                        "type": "string",
-                        "enum": ["sku", "composite_id"],
-                        "description": "Especifica si 'product_identifier' es 'sku' (para todas las ubicaciones) o 'composite_id' (para una ubicación específica).",
-                    },
+                        "description": "El nombre completo del modelo o el código SKU del producto. El sistema detectará el tipo automáticamente.",
+                    }
                 },
-                "required": ["product_identifier", "identifier_type"],
+                "required": ["product_identifier"],
             },
         },
     },
@@ -1055,27 +1047,14 @@ def process_new_message(
                         
                     elif fn_name == "get_live_product_details":
                         ident = args.get("product_identifier")
-                        id_type = args.get("identifier_type")
                         query_text = messages[-2].get('content', '') if len(messages) > 1 and messages[-2].get('role') == 'user' else ''
-                        details_result = None
-                        if ident and id_type:
-                            ident, id_type = _resolve_product_identifier(ident, id_type, sb_conversation_id)
-                            if id_type == "sku":
-                                user_city = conversation_location.get_conversation_city(sb_conversation_id)
-                                warehouses = conversation_location.get_warehouses_for_city(user_city) if user_city else None
-                                details_list = product_service.get_live_product_details_by_sku(
-                                    item_code_query=ident,
-                                    warehouse_names=warehouses,
-                                )
-                                if details_list:
-                                    grouped = product_utils.group_products_by_model(details_list)
-                                    if grouped:
-                                        details_result = product_utils.format_product_response(grouped[0], query_text)
-                            elif id_type == "composite_id":
-                                details_dict = product_service.get_live_product_details_by_id(composite_id=ident)
-                                if details_dict:
-                                    details_result = product_utils.format_product_response(details_dict, query_text)
-                        output_content_str = json.dumps({"status": "success" if details_result else "not_found", "formatted_response": details_result}, ensure_ascii=False)
+                        details_list = product_service.get_live_product_details(product_identifier=ident)
+                        formatted_response = None
+                        if details_list:
+                            grouped = product_utils.group_products_by_model(details_list)
+                            if grouped:
+                                formatted_response = product_utils.format_product_response(grouped[0], query_text)
+                        output_content_str = json.dumps({"status": "success" if formatted_response else "not_found", "formatted_response": formatted_response}, ensure_ascii=False)
                     elif fn_name == "get_color_variants":
                         args['conversation_id'] = sb_conversation_id
                         output_content_str = _tool_get_color_variants(**args)

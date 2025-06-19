@@ -184,12 +184,123 @@ def _tool_get_color_variants(product_identifier: str) -> str:
 
 # --- Tool Schema (Feature-Parity with openai_service.py) ---
 tools_schema = [
-    {"type":"function","function":{"name":"get_store_info","description":"Obtiene información de las tiendas Damasco, como direcciones y nombres de almacén (whsName) para búsquedas de productos. Puede filtrar por ciudad o listar todas las ciudades con tiendas.","parameters":{"type":"object","properties":{"city_name":{"type":"string","description":"Opcional. El nombre de la ciudad para la cual obtener información de tiendas. Si se omite, se devuelve una lista de todas las ciudades con tiendas."}},"required":[]}}},
-    {"type":"function","function":{"name":"search_local_products","description":"Busca productos específicos por características, precio y uso previsto. Utilízala cuando el usuario solicite productos en particular. Para preguntas generales sobre marcas disponibles usa `get_available_brands`.","parameters":{"type":"object","properties":{"query_text":{"type":"string","description":"What the user is looking for, like 'phone for gaming' or 'cheap washing machine'. Include all technical specifications like '8gb ram' in the query. Avoid pricing words; use 'sort_by' instead."},"exclude_accessories":{"type":"boolean","description":"Set to false ONLY if the user is explicitly asking for accessories like cases or chargers. Defaults to true to filter out accessories from primary product searches.","default":True},"warehouse_names":{"type":"array","items":{"type":"string"},"description":"List of `whsName` values returned from `get_store_info`. Do NOT use `branchName` or city names. Use values like 'Almacen Principal CCCT'."},"min_price":{"type":"number","description":"Use if user provides a price range or max budget."},"max_price":{"type":"number","description":"Use if user provides a price range or max budget."},"sort_by":{"type":"string","description":"Use 'price_asc' for queries like 'cheapest', 'most affordable'. Use 'price_desc' for 'most expensive'. Otherwise use 'relevance'."},"limit":{"type":"integer","description":"Opcional. Número máximo de resultados a retornar."},"min_score":{"type":"number","description":"Opcional. Umbral mínimo de similitud para aceptar un resultado. Valor por defecto 0.35."},"exclude_skus":{"type":"array","items":{"type":"string"},"description":"Opcional. Una lista de SKUs de productos a excluir de los resultados de búsqueda para evitar repeticiones."}},"required":["query_text"]}}},
-    {"type":"function","function":{"name":"get_available_brands","description":"Returns a list of all available product brands. Use this when the user asks 'what brands do you have?' or similar questions.","parameters":{"type":"object","properties":{"category":{"type":"string","description":"Opcional. Categoría de producto para filtrar las marcas, por ejemplo 'Celular'."}},"required":[]}}},
-    {"type":"function","function":{"name":"get_live_product_details","description":"Obtiene información detallada y actualizada de un producto específico de Damasco, incluyendo precio (USD), precio en Bolívares (`priceBolivar`), y stock por sucursal. Usar cuando el usuario pregunta por un producto específico (por SKU/código) o después de `search_local_products` si quiere más detalles.","parameters":{"type":"object","properties":{"product_identifier":{"type":"string","description":"El código de item (SKU) del producto o el ID compuesto (itemCode_warehouseName)."},"identifier_type":{"type":"string","enum":["sku","composite_id"],"description":"Especifica si 'product_identifier' es 'sku' (para todas las ubicaciones) o 'composite_id' (para una ubicación específica)."}},"required":["product_identifier","identifier_type"]}}},
-    {"type":"function","function":{"name":"get_color_variants","description":"Obtiene los distintos colores disponibles para un modelo de producto. Úsalo cuando el usuario pregunte '¿qué colores tienes para el [modelo]?'","parameters":{"type":"object","properties":{"product_identifier":{"type":"string","description":"El nombre del modelo del producto (ej. 'TECNO SPARK 30C') o un SKU específico (ej. 'D0007783') para buscar sus variantes de color."}},"required":["product_identifier"]}}},
-    {"type":"function","function":{"name":"send_whatsapp_order_summary_template","description":"Envía la plantilla de resumen de pedido 'confirmacion_datos_cliente' por WhatsApp al cliente una vez que se hayan recolectado todos los datos necesarios (nombre, apellido, cédula, teléfono, correo, dirección de la sucursal, productos y total).","parameters":{"type":"object","properties":{"customer_platform_user_id":{"type":"string","description":"ID del usuario en la plataforma de mensajería (generalmente el número de teléfono para WhatsApp, o el ID de usuario interno si es un cliente existente)."},"conversation_id":{"type":"string","description":"ID de la conversación actual de Support Board."},"template_variables":{"type":"array","description":"Lista de EXACTAMENTE 8 cadenas en el siguiente orden: 1. Nombre(s) del cliente, 2. Apellido(s) del cliente, 3. Cédula, 4. Teléfono de contacto, 5. Correo electrónico, 6. Nombre de la sucursal de retiro, 7. Descripción de los productos (ej: 'Producto A x1, Producto B x2'), 8. Precio total (ej: '$125.50 USD').","items":{"type":"string"},"minItems":8,"maxItems":8}},"required":["customer_platform_user_id","conversation_id","template_variables"]}}}
+    {
+        "type": "function",
+        "function": {
+            "name": "get_store_info",
+            "description": "Obtiene información de las tiendas Damasco, como direcciones y nombres de almacén (whsName) para búsquedas de productos. Puede filtrar por ciudad o listar todas las ciudades con tiendas.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city_name": {
+                        "type": "string",
+                        "description": "Opcional. El nombre de la ciudad para la cual obtener información de tiendas. Si se omite, se devuelve una lista de todas las ciudades con tiendas."
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_local_products",
+            "description": "Busca productos específicos por características, precio y uso previsto. Utilízala cuando el usuario solicite productos en particular. Para preguntas generales sobre marcas disponibles usa `get_available_brands`.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query_text": {
+                        "type": "string",
+                        "description": "What the user is looking for, like 'phone for gaming' or 'cheap washing machine'. Include all technical specifications like '8gb ram' in the query. Avoid pricing words; use 'sort_by' instead."
+                    },
+                    "exclude_accessories": {
+                        "type": "boolean",
+                        "description": "Set to false ONLY if the user is explicitly asking for accessories like cases or chargers. Defaults to true to filter out accessories from primary product searches.",
+                        "default": True
+                    },
+                    "warehouse_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of `whsName` values returned from `get_store_info`. Do NOT use `branchName` or city names. Use values like 'Almacen Principal CCCT'."
+                    },
+                    "min_price": {"type": "number", "description": "Use if user provides a price range or max budget."},
+                    "max_price": {"type": "number", "description": "Use if user provides a price range or max budget."},
+                    "sort_by": {"type": "string", "description": "Use 'price_asc' for queries like 'cheapest', 'most affordable'. Use 'price_desc' for 'most expensive'. Otherwise use 'relevance'."},
+                    "limit": {"type": "integer", "description": "Opcional. Número máximo de resultados a retornar."},
+                    "min_score": {"type": "number", "description": "Opcional. Umbral mínimo de similitud para aceptar un resultado. Valor por defecto 0.35."},
+                    "exclude_skus": {"type": "array", "items": {"type": "string"}, "description": "Opcional. Una lista de SKUs de productos a excluir de los resultados de búsqueda para evitar repeticiones."}
+                },
+                "required": ["query_text"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_available_brands",
+            "description": "Returns a list of all available product brands. Use this when the user asks 'what brands do you have?' or similar questions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Opcional. Categoría de producto para filtrar las marcas, por ejemplo 'Celular'."
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_live_product_details",
+            "description": "Obtiene información detallada y actualizada de un producto específico, ya sea por su nombre de modelo o código SKU.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "product_identifier": {
+                        "type": "string",
+                        "description": "El nombre completo del modelo o el código SKU del producto. El sistema detectará el tipo automáticamente."
+                    }
+                },
+                "required": ["product_identifier"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_color_variants",
+            "description": "Obtiene los distintos colores disponibles para un modelo de producto. Úsalo cuando el usuario pregunte '¿qué colores tienes para el [modelo]?'",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "product_identifier": {
+                        "type": "string",
+                        "description": "El nombre del modelo del producto (ej. 'TECNO SPARK 30C') o un SKU específico (ej. 'D0007783') para buscar sus variantes de color."
+                    }
+                },
+                "required": ["product_identifier"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_whatsapp_order_summary_template",
+            "description": "Envía la plantilla de resumen de pedido 'confirmacion_datos_cliente' por WhatsApp al cliente una vez que se hayan recolectado todos los datos necesarios (nombre, apellido, cédula, teléfono, correo, dirección de la sucursal, productos y total).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "customer_platform_user_id": {"type": "string", "description": "ID del usuario en la plataforma de mensajería (generalmente el número de teléfono para WhatsApp, o el ID de usuario interno si es un cliente existente)."},
+                    "conversation_id": {"type": "string", "description": "ID de la conversación actual de Support Board."},
+                    "template_variables": {"type": "array", "description": "Lista de EXACTAMENTE 8 cadenas en el siguiente orden: 1. Nombre(s) del cliente, 2. Apellido(s) del cliente, 3. Cédula, 4. Teléfono de contacto, 5. Correo electrónico, 6. Nombre de la sucursal de retiro, 7. Descripción de los productos (ej: 'Producto A x1, Producto B x2'), 8. Precio total (ej: '$125.50 USD').", "items": {"type": "string"}, "minItems": 8, "maxItems": 8}
+                },
+                "required": ["customer_platform_user_id", "conversation_id", "template_variables"]
+            }
+        }
+    }
 ]
 
 _SKU_PATTERN = re.compile(r'\b(D\d{4,})\b')
@@ -326,18 +437,15 @@ def process_new_message_gemini(
                         
                         output_str = json.dumps({"status": "success" if candidate_products else "not_found", "formatted_response": formatted_response}, ensure_ascii=False)
                     elif fn_name == "get_live_product_details":
-                        ident, id_type = args.get("product_identifier"), args.get("identifier_type")
+                        ident = args.get("product_identifier")
                         query_text = messages[-2].get('content', '') if len(messages) > 1 else ''
-                        details = None
-                        if ident and id_type == "sku":
-                            user_city = conversation_location.get_conversation_city(conversation_id)
-                            warehouses = conversation_location.get_warehouses_for_city(user_city) if user_city else None
-                            details_list = product_service.get_live_product_details_by_sku(ident, warehouse_names=warehouses)
-                            if details_list: details = product_utils.format_product_response(product_utils.group_products_by_model(details_list)[0], query_text)
-                        elif ident and id_type == "composite_id":
-                            details_dict = product_service.get_live_product_details_by_id(ident)
-                            if details_dict: details = product_utils.format_product_response(details_dict, query_text)
-                        output_str = json.dumps({"status": "success" if details else "not_found", "formatted_response": details}, ensure_ascii=False)
+                        details_list = product_service.get_live_product_details(product_identifier=ident)
+                        formatted = None
+                        if details_list:
+                            grouped = product_utils.group_products_by_model(details_list)
+                            if grouped:
+                                formatted = product_utils.format_product_response(grouped[0], query_text)
+                        output_str = json.dumps({"status": "success" if formatted else "not_found", "formatted_response": formatted}, ensure_ascii=False)
                     elif fn_name == "get_color_variants":
                         output_str = _tool_get_color_variants(**args)
                     elif fn_name == "send_whatsapp_order_summary_template":
