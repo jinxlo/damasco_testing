@@ -25,6 +25,10 @@ from ..config import Config # For SYSTEM_PROMPT, MAX_HISTORY_MESSAGES etc.
 from ..utils import embedding_utils
 from ..utils import conversation_location
 from ..utils import product_utils # Import our new formatting utils
+try:
+    from ..utils import conversation_recs
+except Exception:  # pragma: no cover - allow tests without this module
+    conversation_recs = None
 try:  # Optional import for testing environments
     from ..utils.whs_utils import canonicalize_whs_name
 except Exception:  # pragma: no cover - fallback for stripped test modules
@@ -40,6 +44,9 @@ user_is_asking_for_list = getattr(
 )
 user_is_asking_for_price = getattr(
     product_utils, "user_is_asking_for_price", lambda message: False
+)
+user_is_asking_for_best = getattr(
+    product_utils, "user_is_asking_for_best", lambda message: False
 )
 import re
 
@@ -804,6 +811,29 @@ def process_new_message(
                 )
                 return
 
+    if new_user_message and user_is_asking_for_best(new_user_message) and conversation_recs:
+        recs, intent = conversation_recs.get_recommendations(sb_conversation_id)
+        if len(recs) >= 2:
+            best_list = product_recommender.rank_products(
+                user_intent=intent or "",
+                candidates=recs,
+                top_n=1,
+            )
+            if best_list:
+                best = best_list[0]
+                reason = best.get("reason_for_recommendation", "")
+                model = best.get("item_name", "este modelo")
+                short_msg = f"Entre esas opciones, el {model} es el m\u00e1s recomendado. {reason}"
+                support_board_service.send_reply_to_channel(
+                    conversation_id=sb_conversation_id,
+                    message_text=short_msg,
+                    source=conversation_source,
+                    target_user_id=customer_user_id,
+                    conversation_details=conversation_data,
+                    triggering_message_id=triggering_message_id,
+                )
+                return
+
     sb_history_list = conversation_data.get("messages", [])
     try:
         openai_history, previously_shown_skus = _prune_and_format_sb_history(sb_history_list)
@@ -944,6 +974,17 @@ def process_new_message(
                                 candidates=candidate_products,
                                 sort_by=args.get("sort_by")
                             )
+                            if conversation_recs:
+                                try:
+                                    recs_to_store = [
+                                        {k: (float(v) if isinstance(v, Decimal) else v) for k, v in p.items()}
+                                        for p in ranked_products
+                                    ]
+                                    conversation_recs.save_recommendations(
+                                        sb_conversation_id, recs_to_store, triggering_user_message_content
+                                    )
+                                except Exception:
+                                    logger.exception("Failed to cache recommendations")
                             formatted_response = product_utils.format_ai_recommendations(ranked_products)
                         
                         output_content_str = json.dumps({"status": "success" if candidate_products else "not_found", "formatted_response": formatted_response}, ensure_ascii=False)
