@@ -69,6 +69,7 @@ def search_local_products(
     required_specs: Optional[List[str]] = None,
     exclude_skus: Optional[List[str]] = None,
     is_list_query: bool = False,
+    retry_on_miss: bool = True,
 ) -> Optional[List[Dict[str, Any]]]:
     if not query_text or not isinstance(query_text, str):
         logger.warning("Search query is empty or invalid.")
@@ -153,6 +154,30 @@ def search_local_products(
 
             candidate_rows = unique_candidates_q.limit(limit * 3).all()
             logger.info(f"Stage 1 Search: Found {len(candidate_rows)} unique candidates.")
+
+            # If no candidates were found and retry_on_miss is enabled, attempt a
+            # fuzzy correction on the query using existing product names.
+            if not candidate_rows and retry_on_miss:
+                suggestion = _suggest_closest_product_name(query_text, session, detected_brands)
+                if suggestion and suggestion.lower() != query_text.lower():
+                    logger.info(
+                        f"Retrying product search with corrected text: '{suggestion}'"
+                    )
+                    return search_local_products(
+                        suggestion,
+                        limit=limit,
+                        filter_stock=filter_stock,
+                        min_score=min_score,
+                        warehouse_names=warehouse_names,
+                        min_price=min_price,
+                        max_price=max_price,
+                        sort_by=sort_by,
+                        exclude_accessories=exclude_accessories,
+                        required_specs=required_specs,
+                        exclude_skus=exclude_skus,
+                        is_list_query=is_list_query,
+                        retry_on_miss=False,
+                    )
 
             if required_specs:
                 filtered_candidates = []
@@ -244,6 +269,41 @@ def search_local_products(
         except Exception as exc:
             logger.exception("Unexpected error during product search: %s", exc)
             return None
+
+
+def _suggest_closest_product_name(
+    original_query: str,
+    session: Session,
+    detected_brands: List[str],
+) -> Optional[str]:
+    """Return the closest product name found in the DB based on simple
+    Levenshtein ratio matching. Only considers products from detected brands to
+    limit the search space. Returns None if no reasonably close match is found."""
+
+    try:
+        candidate_q = session.query(Product.item_name).filter(Product.stock > 0)
+        if detected_brands:
+            brand_clauses = [Product.brand.ilike(f"%{b}%") for b in detected_brands]
+            candidate_q = candidate_q.filter(or_(*brand_clauses))
+
+        candidate_names = [row[0] for row in candidate_q.limit(1000).all()]
+        if not candidate_names:
+            return None
+
+        from difflib import SequenceMatcher
+
+        best_name = None
+        best_ratio = 0.0
+        for name in candidate_names:
+            ratio = SequenceMatcher(None, original_query.lower(), name.lower()).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_name = name
+
+        return best_name if best_ratio >= 0.75 else None
+    except Exception:
+        logger.exception("Error during typo correction search")
+        return None
 
 
 def _normalize_string(value: Any) -> Optional[str]:
