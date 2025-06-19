@@ -461,6 +461,7 @@ def add_or_update_product_in_db(
 # --- Getter functions ---
 def get_live_product_details_by_sku(
     item_code_query: str,
+    warehouse_names: Optional[List[str]] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     if not item_code_query:
         logger.error(
@@ -478,9 +479,15 @@ def get_live_product_details_by_sku(
             logger.error("DB session unavailable for get_live_product_details_by_sku.")
             return None
         try:
-            product_entries = (
-                session.query(Product).filter(Product.item_code.ilike(normalized_item_code)).all()
-            )
+            query = session.query(Product).filter(Product.item_code.ilike(normalized_item_code))
+            if warehouse_names:
+                canonical_whs = [canonicalize_whs(w) for w in warehouse_names if w]
+                if canonical_whs:
+                    query = query.filter(Product.warehouse_name_canonical.in_(canonical_whs))
+                    logger.info(
+                        f"Filtering live details for SKU {normalized_item_code} to warehouses: {canonical_whs}"
+                    )
+            product_entries = query.all()
             if not product_entries:
                 logger.info(
                     f"No product entries found with item_code: {normalized_item_code}"
