@@ -87,26 +87,24 @@ def user_is_asking_for_price(message: str) -> bool:
     if not message:
         return False
     PRICE_KEYWORDS = [
-        "precio de",
-        "precio del",
-        "cual es el precio",
-        "cuanto cuesta",
-        "cuánto cuesta",
-        "que precio tiene",
-        "que precio tiene el",
-        "que precio tienes",
-        "qué precio tiene",
-        "qué precio tienes",
+        "precio",
+        "cuanto",
+        "cuánto",
+        "cuesta",
+        "cuestan",
+        "costo",
+        "valor",
+        "sale en",
         "dime el precio",
-        "price of",
-        "how much is",
-        "how much does",
-        "cost of",
-        "cost for",
+        "que precio",
+        "qué precio",
+        "price",
+        "how much",
+        "cost",
     ]
     import unicodedata
     normalized = unicodedata.normalize("NFKD", message).encode("ascii", "ignore").decode().lower()
-    return any(kw in normalized for kw in PRICE_KEYWORDS)
+    return any(re.search(r"\b" + re.escape(kw) + r"\b", normalized) for kw in PRICE_KEYWORDS)
 
 def user_is_asking_for_best(message: str) -> bool:
     """Return True if the user is asking which option is the best."""
