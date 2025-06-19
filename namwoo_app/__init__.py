@@ -19,6 +19,9 @@ logging_config = {
             'format': '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
             'datefmt': '%Y-%m-%d %H:%M:%S'
         },
+        'json': {
+            '()': 'namwoo_app.utils.json_logger.JsonFormatter'
+        },
     },
     'handlers': {
         'console': {
@@ -44,13 +47,22 @@ logging_config = {
             'maxBytes': 5242880,
             'backupCount': 3,
             'encoding': 'utf8',
+        },
+        'json_file': {
+            'level': log_level_env,
+            'class': 'logging.handlers.RotatingFileHandler',
+            'formatter': 'json',
+            'filename': getattr(Config, 'JSON_LOG_FILE', os.path.join(log_dir_path, 'server.jsonl')),
+            'maxBytes': 10485760,
+            'backupCount': 5,
+            'encoding': 'utf8',
         }
     },
     'loggers': {
-        '': { 
-            'handlers': ['console', 'app_file'],
+        '': {
+            'handlers': ['console', 'app_file', 'json_file'],
             'level': log_level_env,
-            'propagate': True 
+            'propagate': True
         },
         'werkzeug': {'handlers': ['console', 'app_file'], 'level': 'INFO', 'propagate': False,},
         'sqlalchemy.engine': {'handlers': ['console', 'app_file'], 'level': 'WARNING','propagate': False,},

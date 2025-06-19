@@ -23,6 +23,8 @@ from ..services.support_board_service import (
 )
 # Text utilities
 from ..utils.text_utils import split_full_name
+# Interaction logger
+from ..utils.interaction_logger import log_interaction
 # ------------------------------
 from ..config import Config
 from ..models.conversation_pause import ConversationPause # Assuming you have this for explicit pauses
@@ -111,6 +113,13 @@ def handle_support_board_webhook():
     sb_conversation_id_str = str(sb_conversation_id)
     sender_user_id_str = str(sender_user_id_str_from_payload)
     customer_user_id_str = str(customer_user_id_str)
+
+    # Log incoming message for auditing
+    try:
+        role = 'user' if sender_user_id_str == customer_user_id_str else 'bot' if sender_user_id_str == str(Config.SUPPORT_BOARD_DM_BOT_USER_ID) else 'agent'
+        log_interaction(sb_conversation_id_str, sender_user_id_str, role, new_user_message_text or '')
+    except Exception:
+        logger.exception("Failed to log incoming interaction")
 
     if order_vars and isinstance(order_vars, list) and len(order_vars) == 8:
         # The phone number is expected to be the 4th item (index 3)
