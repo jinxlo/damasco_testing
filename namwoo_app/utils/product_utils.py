@@ -103,6 +103,25 @@ def user_is_asking_for_price(message: str) -> bool:
     normalized = unicodedata.normalize("NFKD", message).encode("ascii", "ignore").decode().lower()
     return any(kw in normalized for kw in PRICE_KEYWORDS)
 
+def user_is_asking_for_best(message: str) -> bool:
+    """Return True if the user is asking which option is the best."""
+    if not message:
+        return False
+    BEST_KEYWORDS = [
+        "cual es el mejor",
+        "cual seria el mejor",
+        "de estos cual es el mejor",
+        "de estos cual seria el mejor",
+        "cual es mejor",
+        "which is best",
+        "which one is best",
+    ]
+    import unicodedata
+    normalized = (
+        unicodedata.normalize("NFKD", message).encode("ascii", "ignore").decode().lower()
+    )
+    return any(kw in normalized for kw in BEST_KEYWORDS)
+
 def extract_brand_from_message(message: str) -> Optional[str]:
     """Return a known brand mentioned in the user's message, if any."""
     if not message:

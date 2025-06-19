@@ -150,6 +150,23 @@ def test_user_is_asking_for_list_detection():
         assert not product_utils.user_is_asking_for_list(msg)
 
 
+def test_user_is_asking_for_best_detection():
+    best_msgs = [
+        "y de estos 3 cual seria el mejor?",
+        "cual es el mejor de estos?",
+        "which one is best?",
+    ]
+    for msg in best_msgs:
+        assert product_utils.user_is_asking_for_best(msg)
+
+    non_best_msgs = [
+        "me recomiendas uno", 
+        "dame detalles del a26",
+    ]
+    for msg in non_best_msgs:
+        assert not product_utils.user_is_asking_for_best(msg)
+
+
 def test_generate_product_location_id_canonicalizes_branch():
     result = generate_product_location_id("SKU1", "CCCT")
     assert result == "SKU1_Almacen_Principal_CCCT"
