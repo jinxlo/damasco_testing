@@ -372,19 +372,53 @@ def _tool_get_color_variants(product_identifier: str, conversation_id: Optional[
     }, ensure_ascii=False, indent=2)
 
 
+def _build_color_map(product_identifier: str) -> Dict[str, str]:
+    """Helper to build a color->SKU map for the given identifier."""
+    variants = product_service.get_color_variants(product_identifier)
+    if not variants:
+        return {}
+
+    color_map: Dict[str, str] = {}
+    for sku in variants:
+        details_list = product_service.get_live_product_details_by_sku(item_code_query=sku)
+        if not details_list:
+            continue
+        item_name = details_list[0].get("item_name") or details_list[0].get("itemName", "")
+        color, _ = product_utils.extract_color_from_name(item_name)
+        if color:
+            color_map.setdefault(color, sku)
+            color_map.setdefault(item_name, sku)
+    return color_map
+
+
 def _resolve_product_identifier(ident: str, id_type: str, conversation_id: str) -> Tuple[str, str]:
-    """Resolve color names to SKUs using the conversation color map."""
+    """Resolve color names to SKUs using conversation cache or on-demand lookup."""
     if id_type == "sku" and ident and not re.match(r"^D\d+$", ident, re.IGNORECASE):
         if conversation_color_map:
             color_map = conversation_color_map.get_color_map(conversation_id)
         else:
             color_map = {}
+
+        color, base_name = product_utils.extract_color_from_name(ident)
+        resolved = None
+
         if color_map:
-            color, _ = product_utils.extract_color_from_name(ident)
             if ident in color_map:
-                ident = color_map[ident]
+                resolved = color_map[ident]
             elif color and color in color_map:
-                ident = color_map[color]
+                resolved = color_map[color]
+
+        if not resolved:
+            new_map = _build_color_map(base_name or ident)
+            if new_map and conversation_color_map:
+                conversation_color_map.set_color_map(conversation_id, new_map)
+            if ident in new_map:
+                resolved = new_map[ident]
+            elif color and color in new_map:
+                resolved = new_map[color]
+
+        if resolved:
+            ident = resolved
     return ident, id_type
 
 
