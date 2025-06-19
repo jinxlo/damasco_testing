@@ -95,3 +95,23 @@ def test_get_color_variants_maps_skus(monkeypatch):
     monkeypatch.setattr(openai_service, 'conversation_color_map', dummy_map, raising=False)
     ident, id_type = openai_service._resolve_product_identifier('samsung camon blanco', 'sku', '1')
     assert ident == 'A1'
+
+
+def test_resolve_builds_color_map(monkeypatch):
+    monkeypatch.setattr(openai_service.product_service, 'get_color_variants', lambda ident: ['A1', 'A2'], raising=False)
+
+    def fake_details(sku=None, **kw):
+        code = sku or kw.get('item_code_query')
+        if code == 'A1':
+            return [{'item_name': 'TECNO CAMON 40 PRO BLANCO'}]
+        return [{'item_name': 'TECNO CAMON 40 PRO NEGRO'}]
+
+    monkeypatch.setattr(openai_service.product_service, 'get_live_product_details_by_sku', fake_details, raising=False)
+
+    stored = {}
+    dummy_map = types.SimpleNamespace(get_color_map=lambda cid: {}, set_color_map=lambda cid, m: stored.update(m))
+    monkeypatch.setattr(openai_service, 'conversation_color_map', dummy_map, raising=False)
+
+    ident, id_type = openai_service._resolve_product_identifier('TECNO CAMON 40 PRO Blanco', 'sku', '1')
+    assert ident == 'A1'
+    assert stored == {'Blanco': 'A1', 'TECNO CAMON 40 PRO BLANCO': 'A1', 'Negro': 'A2', 'TECNO CAMON 40 PRO NEGRO': 'A2'}
