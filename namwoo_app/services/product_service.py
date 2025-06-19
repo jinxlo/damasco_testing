@@ -535,6 +535,62 @@ def get_live_product_details_by_id(composite_id: str) -> Optional[Dict[str, Any]
             )
             return None
 
+
+def get_live_product_details(product_identifier: str, warehouse_names: Optional[List[str]] = None) -> Optional[List[Dict[str, Any]]]:
+    """Guardrail dispatcher that auto-detects identifier type and provides fallbacks."""
+    if not product_identifier:
+        return None
+
+    identifier = str(product_identifier).strip()
+    is_sku = bool(re.match(r'^D\d{4,}$', identifier, re.IGNORECASE))
+
+    if is_sku:
+        logger.info(f"Guardrail: Identifier '{identifier}' detected as SKU. Routing to SKU lookup.")
+        results = get_live_product_details_by_sku(item_code_query=identifier, warehouse_names=warehouse_names)
+        if results:
+            return results
+        logger.info(f"Guardrail fallback: No results for SKU '{identifier}'. Trying name search.")
+        return get_live_product_details_by_name(model_name_query=identifier)
+    else:
+        logger.info(f"Guardrail: Identifier '{identifier}' detected as model name. Routing to name search.")
+        results = get_live_product_details_by_name(model_name_query=identifier)
+        if results:
+            return results
+        normalized = re.sub(r'[^A-Za-z0-9]', '', identifier).upper()
+        if normalized.startswith('D') and normalized[1:].isdigit():
+            logger.info(
+                f"Guardrail fallback: Name search failed. Trying SKU lookup for normalized identifier '{normalized}'."
+            )
+            return get_live_product_details_by_sku(item_code_query=normalized, warehouse_names=warehouse_names)
+        return results
+
+
+def get_live_product_details_by_name(model_name_query: str) -> Optional[List[Dict[str, Any]]]:
+    """Fetch all product variants that match a given model name."""
+    if not model_name_query:
+        return []
+
+    with db_utils.get_db_session() as session:
+        if not session:
+            return None
+        try:
+            product_entries = (
+                session.query(Product)
+                .filter(Product.item_name.ilike(f'%{model_name_query}%'))
+                .all()
+            )
+
+            if not product_entries:
+                logger.info(f"No product entries found with model name like: {model_name_query}")
+                return []
+
+            results = [entry.to_dict(include_source=True) for entry in product_entries]
+            logger.info(f"Found {len(results)} variants for model name: {model_name_query}")
+            return results
+        except Exception as exc:
+            logger.exception(f"Error fetching product by name: {model_name_query}, Error: {exc}")
+            return None
+
 def get_color_variants(product_identifier: str) -> Optional[List[str]]:
     """
     Gets color variants for a product, accepting either a specific SKU
