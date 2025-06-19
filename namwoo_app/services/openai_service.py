@@ -26,6 +26,10 @@ from ..utils import embedding_utils
 from ..utils import conversation_location
 from ..utils import product_utils # Import our new formatting utils
 try:
+    from ..utils import conversation_color_map
+except Exception:  # pragma: no cover - allow tests without this module
+    conversation_color_map = None
+try:
     from ..utils import conversation_recs
 except Exception:  # pragma: no cover - allow tests without this module
     conversation_recs = None
@@ -338,15 +342,15 @@ def _tool_get_store_info(city_name: Optional[str] = None) -> str:
             return json.dumps({"status": "no_cities_found", "message": "No hay ciudades con tiendas configuradas en el sistema."}, ensure_ascii=False)
 
 
-def _tool_get_color_variants(product_identifier: str) -> str:
+def _tool_get_color_variants(product_identifier: str, conversation_id: Optional[str] = None) -> str:
     if not product_identifier:
         return json.dumps({"status": "error", "message": "El parámetro product_identifier es requerido."}, ensure_ascii=False)
     variants = product_service.get_color_variants(product_identifier)
     if variants is None:
         return json.dumps({"status": "error", "message": "No se pudo buscar variantes."}, ensure_ascii=False)
 
-    # Map variant SKUs to color names by fetching each product's details.
     color_names = set()
+    color_map: Dict[str, str] = {}
     for sku in variants:
         details_list = product_service.get_live_product_details_by_sku(item_code_query=sku)
         if details_list:
@@ -354,11 +358,52 @@ def _tool_get_color_variants(product_identifier: str) -> str:
             color, _ = product_utils.extract_color_from_name(item_name)
             if color:
                 color_names.add(color)
+                color_map.setdefault(color, sku)
 
-    # If SKUs were found but no colors could be extracted, return the SKUs themselves.
     final_list = sorted(color_names) if color_names else variants
 
-    return json.dumps({"status": "success" if final_list else "not_found", "variants": final_list}, ensure_ascii=False, indent=2)
+    if conversation_id and color_map and conversation_color_map:
+        conversation_color_map.set_color_map(conversation_id, color_map)
+
+    return json.dumps({
+        "status": "success" if final_list else "not_found",
+        "variants": final_list,
+        "color_sku_map": color_map,
+    }, ensure_ascii=False, indent=2)
+
+
+def _resolve_product_identifier(ident: str, id_type: str, conversation_id: str) -> Tuple[str, str]:
+    """Resolve color names to SKUs using the conversation color map."""
+    if id_type == "sku" and ident and not re.match(r"^D\d+$", ident, re.IGNORECASE):
+        if conversation_color_map:
+            color_map = conversation_color_map.get_color_map(conversation_id)
+        else:
+            color_map = {}
+
+        color, _ = product_utils.extract_color_from_name(ident)
+
+        if not color_map or (color and color not in color_map and ident not in color_map):
+            variants = product_service.get_color_variants(ident)
+            new_map: Dict[str, str] = {}
+            if variants:
+                for sku in variants:
+                    details_list = product_service.get_live_product_details_by_sku(item_code_query=sku)
+                    if details_list:
+                        item_name = details_list[0].get("item_name") or details_list[0].get("itemName", "")
+                        c, _ = product_utils.extract_color_from_name(item_name)
+                        if c:
+                            new_map.setdefault(c, sku)
+                if new_map:
+                    color_map.update(new_map)
+                    if conversation_color_map and conversation_id:
+                        conversation_color_map.set_color_map(conversation_id, color_map)
+
+        if color_map:
+            if ident in color_map:
+                ident = color_map[ident]
+            elif color and color in color_map:
+                ident = color_map[color]
+    return ident, id_type
 
 
 def sanitize_tool_args(args: Dict[str, Any], conversation_id: str) -> Dict[str, Any]:
@@ -998,6 +1043,7 @@ def process_new_message(
                         query_text = messages[-2].get('content', '') if len(messages) > 1 and messages[-2].get('role') == 'user' else ''
                         details_result = None
                         if ident and id_type:
+                            ident, id_type = _resolve_product_identifier(ident, id_type, sb_conversation_id)
                             if id_type == "sku":
                                 details_list = product_service.get_live_product_details_by_sku(item_code_query=ident)
                                 if details_list:
@@ -1010,6 +1056,7 @@ def process_new_message(
                                     details_result = product_utils.format_product_response(details_dict, query_text)
                         output_content_str = json.dumps({"status": "success" if details_result else "not_found", "formatted_response": details_result}, ensure_ascii=False)
                     elif fn_name == "get_color_variants":
+                        args['conversation_id'] = sb_conversation_id
                         output_content_str = _tool_get_color_variants(**args)
                     elif fn_name == "find_relevant_accessory":
                         output_content_str = _tool_find_relevant_accessory(**args)
