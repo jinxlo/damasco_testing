@@ -169,14 +169,17 @@ def _tool_get_color_variants(product_identifier: str) -> str:
     variants = product_service.get_color_variants(product_identifier)
     if variants is None:
         return json.dumps({"status": "error", "message": "No se pudo buscar variantes."}, ensure_ascii=False)
-    
+
     color_names = set()
     for sku in variants:
-        color, _ = product_utils.extract_color_from_name(sku)
-        if color:
-            color_names.add(color)
+        details_list = product_service.get_live_product_details_by_sku(sku)
+        if details_list:
+            item_name = details_list[0].get("item_name") or details_list[0].get("itemName", "")
+            color, _ = product_utils.extract_color_from_name(item_name)
+            if color:
+                color_names.add(color)
 
-    final_list = sorted(list(color_names)) if color_names else variants
+    final_list = sorted(color_names) if color_names else variants
     return json.dumps({"status": "success" if final_list else "not_found", "variants": final_list}, ensure_ascii=False, indent=2)
 
 # --- Tool Schema (Feature-Parity with openai_service.py) ---
