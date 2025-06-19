@@ -6,12 +6,12 @@ from ..config import Config
 
 logger = logging.getLogger(__name__)
 
-LOG_FILE = getattr(Config, 'INTERACTION_LOG_FILE', os.path.join(Config.LOG_DIR, 'interactions.jsonl'))
-os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+INTERACTION_LOG_FILE = getattr(Config, 'INTERACTION_LOG_FILE', os.path.join(Config.LOG_DIR, 'interactions.jsonl'))
+os.makedirs(os.path.dirname(INTERACTION_LOG_FILE), exist_ok=True)
 
 
-def log_interaction(conversation_id: str, user_id: str, role: str, message: str) -> None:
-    """Append a single interaction entry to the JSONL log file."""
+def log_conversation(conversation_id: str, user_id: str, role: str, message: str) -> None:
+    """Append a single conversation entry to the JSONL log file."""
     entry = {
         "timestamp": datetime.utcnow().isoformat(),
         "conversation_id": str(conversation_id) if conversation_id else None,
@@ -20,7 +20,7 @@ def log_interaction(conversation_id: str, user_id: str, role: str, message: str)
         "message": message or "",
     }
     try:
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
+        with open(INTERACTION_LOG_FILE, "a", encoding="utf-8") as f:
             json.dump(entry, f, ensure_ascii=False)
             f.write("\n")
     except Exception as e:
