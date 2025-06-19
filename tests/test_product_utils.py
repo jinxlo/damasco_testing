@@ -128,6 +128,7 @@ def test_user_is_asking_for_price_detection():
         "¿Cuál es el precio del TECNO SPARK?",
         "precio de D0001234",
         "How much is the iPhone 15?",
+        "que precio tienes el samsung a36 blanco?",
     ]
     for msg in price_msgs:
         assert product_utils.user_is_asking_for_price(msg)
