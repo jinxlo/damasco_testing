@@ -793,8 +793,52 @@ def _prune_and_format_sb_history(
     pruned_messages.reverse() # Restore chronological order
     
     logger.info(f"Original history had {len(openai_messages)} messages. Pruned to {len(pruned_messages)}.")
-    
+
     return pruned_messages, list(all_shown_skus)
+
+
+# ---------------------------------------------------------------------------
+# Helper: format search results based on intent
+# ---------------------------------------------------------------------------
+def _format_search_results(
+    candidate_products: List[Dict[str, Any]],
+    query_text: str,
+    triggering_message: str,
+    *,
+    is_price_request: bool = False,
+    is_list_request: bool = False,
+    sort_by: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    conv_recs: Any = None,
+) -> Optional[str]:
+    """Return a formatted response for search results."""
+    formatted_response = None
+    if is_price_request and candidate_products:
+        best_match = [candidate_products[0]]
+        grouped = product_utils.group_products_by_model(best_match)
+        if grouped:
+            formatted_response = product_utils.format_product_response(
+                grouped[0], query_text
+            )
+    elif is_list_request:
+        formatted_response = product_utils.format_model_list_with_colors(candidate_products)
+    elif candidate_products:
+        ranked_products = product_recommender.rank_products(
+            user_intent=triggering_message,
+            candidates=candidate_products,
+            sort_by=sort_by,
+        )
+        if conv_recs and conversation_id:
+            try:
+                recs_to_store = [
+                    {k: (float(v) if isinstance(v, Decimal) else v) for k, v in p.items()}
+                    for p in ranked_products
+                ]
+                conv_recs.save_recommendations(conversation_id, recs_to_store, triggering_message)
+            except Exception:
+                logger.exception("Failed to cache recommendations")
+        formatted_response = product_utils.format_ai_recommendations(ranked_products)
+    return formatted_response
 
 
 # ---------------------------------------------------------------------------
@@ -1006,44 +1050,27 @@ def process_new_message(
                         args['exclude_skus'] = previously_shown_skus
                         
                         candidate_products = product_service.search_local_products(**args)
+                        formatted_response = _format_search_results(
+                            candidate_products,
+                            query_text,
+                            triggering_user_message_content,
+                            is_price_request=is_price_request,
+                            is_list_request=is_list_request,
+                            sort_by=args.get("sort_by"),
+                            conversation_id=sb_conversation_id,
+                            conv_recs=conversation_recs,
+                        )
 
-                        if is_price_request:
-                            logger.info(
-                                f"Price query detected based on user message: '{triggering_user_message_content}'"
-                            )
-                            grouped = product_utils.group_products_by_model(candidate_products)
-                            if grouped:
-                                formatted_response = product_utils.format_product_response(
-                                    grouped[0], query_text
-                                )
-                            else:
-                                formatted_response = product_utils.format_ai_recommendations(candidate_products)
-                        elif is_list_request:
-                            logger.info(
-                                f"List format requested based on user message: '{triggering_user_message_content}'"
-                            )
-                            formatted_response = product_utils.format_model_list_with_colors(candidate_products)
-                        else:
-                            logger.info("Recommendation format requested. Invoking AI Sales-Associate.")
+                        if not formatted_response and candidate_products:
+                            logger.info("Defaulting to recommendation format.")
                             ranked_products = product_recommender.rank_products(
                                 user_intent=triggering_user_message_content,
                                 candidates=candidate_products,
                                 sort_by=args.get("sort_by")
                             )
-                            if conversation_recs:
-                                try:
-                                    recs_to_store = [
-                                        {k: (float(v) if isinstance(v, Decimal) else v) for k, v in p.items()}
-                                        for p in ranked_products
-                                    ]
-                                    conversation_recs.save_recommendations(
-                                        sb_conversation_id, recs_to_store, triggering_user_message_content
-                                    )
-                                except Exception:
-                                    logger.exception("Failed to cache recommendations")
                             formatted_response = product_utils.format_ai_recommendations(ranked_products)
-                        
-                        output_content_str = json.dumps({"status": "success" if candidate_products else "not_found", "formatted_response": formatted_response}, ensure_ascii=False)
+
+                        output_content_str = json.dumps({"status": "success" if formatted_response else "not_found", "formatted_response": formatted_response}, ensure_ascii=False)
                         
                     elif fn_name == "get_live_product_details":
                         ident = args.get("product_identifier")
