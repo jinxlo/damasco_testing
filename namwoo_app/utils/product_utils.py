@@ -1,6 +1,7 @@
 # namwoo_app/utils/product_utils.py
 import re
 import logging
+import unicodedata
 from typing import Optional, Any, List, Dict
 from collections import defaultdict
 import locale
@@ -37,6 +38,15 @@ logger = logging.getLogger(__name__)
 
 # This constant is now defined here so it's available to functions in this module
 KNOWN_BRANDS = {'SAMSUNG', 'TECNO', 'XIAOMI', 'INFINIX', 'DAMASCO'}
+
+
+def _normalize_word(word: str) -> str:
+    """Return an uppercase ASCII representation of ``word`` without accents."""
+    if not isinstance(word, str):
+        return ""
+    normalized = unicodedata.normalize("NFKD", word)
+    stripped = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return stripped.upper()
 
 def user_is_asking_for_cheapest(message: str) -> bool:
     """Return True if the user clearly wants the cheapest option."""
@@ -139,9 +149,18 @@ def generate_product_location_id(item_code_raw: Any, whs_name_raw: Any) -> Optio
 
 # --- Robust helper functions for grouping and formatting ---
 
+# Supported color names extracted from product titles. Historically most entries
+# used Spanish names, but some use English or include gendered variations.
+# Accents are stripped during comparison so we store the base ASCII forms.
 KNOWN_COLORS = {
-    'NEGRO', 'BLANCO', 'AZUL', 'VERDE', 'ROJO', 'GRIS', 'DORADO', 'PLATEADO',
-    'PURPURA', 'MORADO', 'AMARILLO', 'NARANJA', 'PLATA', 'GRAFITO', 'ROSADO', 'PERLADO'
+    # Spanish masculine and feminine forms
+    'NEGRO', 'NEGRA', 'BLANCO', 'BLANCA', 'AZUL', 'VERDE', 'ROJO', 'ROJA',
+    'GRIS', 'DORADO', 'DORADA', 'PLATEADO', 'PLATEADA', 'PURPURA', 'MORADO',
+    'MORADA', 'AMARILLO', 'AMARILLA', 'NARANJA', 'PLATA', 'GRAFITO', 'ROSADO',
+    'ROSADA', 'PERLADO', 'PERLADA',
+    # English variants
+    'BLACK', 'WHITE', 'BLUE', 'GREEN', 'RED', 'GRAY', 'GREY', 'SILVER', 'GOLD',
+    'PURPLE', 'YELLOW', 'ORANGE', 'PINK'
 }
 WORDS_TO_REMOVE = {'5G', 'OBSEQUIO', '+', 'CON'}
 
@@ -153,27 +172,30 @@ def get_base_model_name(item_name: str) -> str:
     if not item_name:
         return "Producto Desconocido"
 
-    words = item_name.upper().split()
-    # Filter out colors, junk words, and pure specifiers like '256+8'
+    raw_words = item_name.split()
+    normalized = [_normalize_word(w) for w in raw_words]
+    upper_words = [w.upper() for w in raw_words]
+
     base_words = [
-        word for word in words if
-        word not in KNOWN_COLORS and
-        word not in WORDS_TO_REMOVE and
-        not re.fullmatch(r'\d+\+\d+', word) and
-        not re.fullmatch(r'\d+GB', word)
+        uw for uw, nw in zip(upper_words, normalized)
+        if nw not in KNOWN_COLORS
+        and uw not in WORDS_TO_REMOVE
+        and not re.fullmatch(r'\d+\+\d+', uw)
+        and not re.fullmatch(r'\d+GB', uw)
     ]
 
     base_name = ' '.join(base_words).strip()
-    return base_name if base_name else item_name
+    return base_name if base_name else item_name.upper()
 
 def _extract_color_from_name(item_name: str) -> Optional[str]:
     """Extracts a color from the product name string by checking against a known set."""
     if not item_name:
         return None
-    words = item_name.upper().split()
-    for word in reversed(words):
-        if word in KNOWN_COLORS:
-            return word.capitalize()
+    raw_words = item_name.split()
+    for raw in reversed(raw_words):
+        norm = _normalize_word(raw)
+        if norm in KNOWN_COLORS:
+            return raw.capitalize()
     return None
 
 def extract_color_from_name(item_name: str) -> tuple[Optional[str], str]:

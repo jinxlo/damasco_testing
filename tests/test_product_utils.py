@@ -48,17 +48,32 @@ def test_extract_color_from_name():
     assert color == "Gris"
     assert base == "TECNO CAMON 30"
 
+    # English colour names should also be recognised
+    color, base = extract_color_from_name("INFINIX HOT 50 BLUE")
+    assert color == "Blue"
+    assert base == "INFINIX HOT 50"
+
+    # Spanish feminine and accented names
+    color, base = extract_color_from_name("LICUADORA BLANCA")
+    assert color == "Blanca"
+    assert base == "LICUADORA"
+
+    color, base = extract_color_from_name("PARLANTE PÚRPURA")
+    assert color in ("Púrpura", "Purpura")
+    assert base == "PARLANTE"
+
 
 def test_group_products_by_model_and_brands():
     items = [
         {"itemName": "INFINIX HOT 50 NEGRO", "brand": "INFINIX", "price": 240},
         {"itemName": "INFINIX HOT 50 VERDE", "brand": "INFINIX", "price": 240},
         {"itemName": "TECNO SPARK 20 AZUL", "brand": "TECNO", "price": 200},
+        {"itemName": "INFINIX HOT 50 BLUE", "brand": "INFINIX", "price": 250},
     ]
     grouped = group_products_by_model(items)
     assert len(grouped) == 2
     hot50 = next(g for g in grouped if g["model"] == "INFINIX HOT 50")
-    assert sorted(hot50["colors"]) == ["Negro", "Verde"]
+    assert sorted(hot50["colors"]) == ["Blue", "Negro", "Verde"]
     brands = get_available_brands(items)
     assert set(brands) == {"INFINIX", "TECNO"}
 
