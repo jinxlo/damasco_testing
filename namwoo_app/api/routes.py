@@ -24,7 +24,7 @@ from ..services.support_board_service import (
 # Text utilities
 from ..utils.text_utils import split_full_name
 # Interaction logger
-from ..utils.interaction_logger import log_interaction
+from ..utils.interaction_logger import log_conversation
 # ------------------------------
 from ..config import Config
 from ..models.conversation_pause import ConversationPause # Assuming you have this for explicit pauses
@@ -117,7 +117,7 @@ def handle_support_board_webhook():
     # Log incoming message for auditing
     try:
         role = 'user' if sender_user_id_str == customer_user_id_str else 'bot' if sender_user_id_str == str(Config.SUPPORT_BOARD_DM_BOT_USER_ID) else 'agent'
-        log_interaction(sb_conversation_id_str, sender_user_id_str, role, new_user_message_text or '')
+        log_conversation(sb_conversation_id_str, sender_user_id_str, role, new_user_message_text or '')
     except Exception:
         logger.exception("Failed to log incoming interaction")
 

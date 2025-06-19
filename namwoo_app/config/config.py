@@ -25,6 +25,7 @@ class Config:
     SYNC_LOG_FILE = os.path.join(LOG_DIR, 'sync.log')
     JSON_LOG_FILE = os.path.join(LOG_DIR, 'server.jsonl')
     INTERACTION_LOG_FILE = os.path.join(LOG_DIR, 'interactions.jsonl')
+    FEEDBACK_LOG_FILE = os.path.join(LOG_DIR, 'feedback.jsonl')
 
     # --- LLM Configuration ---
     LLM_PROVIDER = os.environ.get('LLM_PROVIDER', 'openai').lower()

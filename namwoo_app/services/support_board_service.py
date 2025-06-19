@@ -10,9 +10,9 @@ from typing import Optional, List, Dict, Any
 # Assuming Config is correctly imported and loads .env variables
 from ..config import Config
 try:
-    from ..utils.interaction_logger import log_interaction
+    from ..utils.interaction_logger import log_conversation
 except Exception:  # pragma: no cover - allow tests without this module
-    def log_interaction(*args, **kwargs):
+    def log_conversation(*args, **kwargs):
         return None
 
 logger = logging.getLogger(__name__)
@@ -351,7 +351,7 @@ def send_reply_to_channel(conversation_id: str, message_text: str, source: Optio
         _add_internal_sb_message(conversation_id=conversation_id, message_text=message_text, bot_user_id=dm_bot_user_id)
 
     try:
-        log_interaction(conversation_id, dm_bot_user_id or 'bot', 'bot', message_text)
+        log_conversation(conversation_id, dm_bot_user_id or 'bot', 'bot', message_text)
     except Exception:
         logger.exception("Failed to log outgoing interaction")
 
