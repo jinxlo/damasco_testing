@@ -84,7 +84,14 @@ def test_get_color_variants_maps_skus(monkeypatch):
 
     monkeypatch.setattr(openai_service.product_service, 'get_live_product_details_by_sku', fake_details, raising=False)
 
-    out = openai_service._tool_get_color_variants('TECNO CAMON 40 PRO')
+    out = openai_service._tool_get_color_variants('TECNO CAMON 40 PRO', conversation_id='1')
     data = json.loads(out)
     assert data['status'] == 'success'
     assert sorted(data['variants']) == ['Blanco', 'Negro']
+    assert data['color_sku_map'] == {'Blanco': 'A1', 'Negro': 'A2'}
+
+    # Verify identifier resolution uses this map
+    dummy_map = types.SimpleNamespace(get_color_map=lambda cid: data['color_sku_map'])
+    monkeypatch.setattr(openai_service, 'conversation_color_map', dummy_map, raising=False)
+    ident, id_type = openai_service._resolve_product_identifier('samsung camon blanco', 'sku', '1')
+    assert ident == 'A1'
