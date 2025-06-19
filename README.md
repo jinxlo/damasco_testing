@@ -201,6 +201,55 @@ A key aspect is distinguishing messages from different sources to ensure correct
 ```
 *(Note: The `fetcher_scripts/` directory for Damasco data acquisition is considered a separate, complementary project/component that pushes data to this application.)*
 
+## 🗂️ Module & File Overview
+
+Below is a concise guide to the main modules that make up NamDamasco. This section complements the folder tree above and explains the purpose of each part of the codebase.
+
+### Root Level
+- **`migrations/`** – SQL migration scripts for evolving the database schema.
+- **`namwoo_app/`** – Core Flask application package containing all runtime code.
+- **`tests/`** – Pytest suite covering utilities, LLM behaviour and end-to-end flows.
+
+### `namwoo_app` Package Highlights
+- **`__init__.py`** – Application factory that creates and configures the Flask app.
+- **`run.py`** – Entry point used by Gunicorn or for local development.
+- **`celery_app.py`** – Configures the Celery instance used for background tasks.
+- **`celery_tasks.py`** – Defines asynchronous tasks such as product ingestion and data updates.
+
+#### API Layer
+- **`api/routes.py`** – Webhook endpoints for incoming conversation events from the support platform.
+- **`api/receiver_routes.py`** – Receives product catalog payloads from the external fetcher service.
+
+#### Configuration & Data
+- **`config/`** – Environment specific settings loaded by the application factory.
+- **`data/`** – Static files including the database schema, store location definitions and the base system prompt for the LLM.
+- **`logs/`** – Default locations for application and sync logs.
+
+#### Database Models
+- **`models/product.py`** – SQLAlchemy model storing product details and vector embeddings.
+- **`models/conversation_pause.py`** – Tracks when a conversation should be paused for human takeover.
+
+#### Scheduler and Services
+- **`scheduler/tasks.py`** – Optional scheduled Celery jobs.
+- **`services/`** – Business logic modules:
+  - `damasco_service.py` – Helpers for connecting to the internal Damasco APIs.
+  - `llm_processing_service.py` – Creates LLM summaries and prepares text for embeddings.
+  - `openai_service.py` and `google_service.py` – Wrappers around each LLM provider.
+  - `product_service.py` – Handles database CRUD and embedding management.
+  - `product_recommender.py` – Ranks products using LLM-based recommendations.
+  - `support_board_service.py` – Interfaces with the Support Board/Nulu AI API.
+  - `sync_service.py` – Coordinates product sync tasks.
+
+#### Utilities
+- **`utils/`** – Helper utilities used across the project:
+  - `conversation_location.py` – Determines store location context from conversations.
+  - `conversation_recs.py` – Manages conversation-level recommendations.
+  - `db_utils.py`, `embedding_utils.py` – Database and embedding helpers.
+  - `product_utils.py` – Product search helpers and query analysis (e.g. color variant detection).
+  - `string_utils.py`, `text_utils.py` – String and text processing helpers.
+  - `whs_utils.py` – Warehouse/`whsName` normalization utilities.
+
+
 ## 🛠️ Setup & Installation Guide (NamDamasco Application Server)
 
 ### Prerequisites:
