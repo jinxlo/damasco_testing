@@ -48,16 +48,11 @@ def _extract_main_type(text: str) -> str:
     return m.group(0).lower() if m else ""
 
 def _extract_color_from_name(item_name: str) -> Optional[str]:
-    """Extracts a color from the end of a product name string."""
+    """Extract a color from a product name using the shared utility."""
     if not item_name:
         return None
-    # This pattern should match colors at the very end of the string.
-    COLOR_EXTRACT_PAT = re.compile(
-        r'\b(NEGRO|BLANCO|AZUL|VERDE|ROJO|GRIS|DORADO|PLATEADO|PURPURA|MORADO|AMARILLO|NARANJA|PLATA|GRAFITO|ROSADO|PERLADO)$',
-        flags=re.IGNORECASE
-    )
-    match = COLOR_EXTRACT_PAT.search(item_name.upper())
-    return match.group(1).capitalize() if match else None
+    # Delegate to the robust implementation in product_utils for consistency.
+    return product_utils._extract_color_from_name(item_name)
 
 
 # --- Search Products ---

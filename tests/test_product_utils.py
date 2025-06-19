@@ -63,6 +63,13 @@ def test_extract_color_from_name():
     assert base == "PARLANTE"
 
 
+def test_extract_color_with_extra_words():
+    text = "TECNO CAMON 40 256+8 BLANCO + OBSEQUIO"
+    color, base = extract_color_from_name(text)
+    assert color == "Blanco"
+    assert base == "TECNO CAMON 40"
+
+
 def test_group_products_by_model_and_brands():
     items = [
         {"itemName": "INFINIX HOT 50 NEGRO", "brand": "INFINIX", "price": 240},

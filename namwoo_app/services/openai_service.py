@@ -344,16 +344,19 @@ def _tool_get_color_variants(product_identifier: str) -> str:
     variants = product_service.get_color_variants(product_identifier)
     if variants is None:
         return json.dumps({"status": "error", "message": "No se pudo buscar variantes."}, ensure_ascii=False)
-    
-    # After getting the variant SKUs, we get the color names for a user-friendly response.
+
+    # Map variant SKUs to color names by fetching each product's details.
     color_names = set()
     for sku in variants:
-        color, _ = product_utils.extract_color_from_name(sku)
-        if color:
-            color_names.add(color)
+        details_list = product_service.get_live_product_details_by_sku(item_code_query=sku)
+        if details_list:
+            item_name = details_list[0].get("item_name") or details_list[0].get("itemName", "")
+            color, _ = product_utils.extract_color_from_name(item_name)
+            if color:
+                color_names.add(color)
 
     # If SKUs were found but no colors could be extracted, return the SKUs themselves.
-    final_list = sorted(list(color_names)) if color_names else variants
+    final_list = sorted(color_names) if color_names else variants
 
     return json.dumps({"status": "success" if final_list else "not_found", "variants": final_list}, ensure_ascii=False, indent=2)
 
